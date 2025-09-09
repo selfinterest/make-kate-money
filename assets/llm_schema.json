@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RedditPostLLMResult",
+  "type": "object",
+  "required": [
+    "post_id",
+    "is_future_upside_claim",
+    "stance",
+    "reason",
+    "tickers",
+    "quality_score"
+  ],
+  "properties": {
+    "post_id": {
+      "type": "string",
+      "description": "The Reddit post ID"
+    },
+    "is_future_upside_claim": {
+      "type": "boolean",
+      "description": "Whether the post makes a forward-looking claim that a stock will go up"
+    },
+    "stance": {
+      "type": "string",
+      "enum": ["bullish", "bearish", "unclear"],
+      "description": "The overall sentiment of the post towards the mentioned stocks"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 320,
+      "description": "Brief explanation of the analysis in 2 sentences or less"
+    },
+    "tickers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{1,5}$"
+      },
+      "uniqueItems": true,
+      "description": "Array of uppercase stock tickers mentioned (subset of detected tickers, excluding false positives)"
+    },
+    "quality_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Evidence strength and clarity score from 0-5"
+    }
+  },
+  "additionalProperties": false
+}
