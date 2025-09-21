@@ -5,6 +5,9 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as path from 'path';
@@ -36,6 +39,73 @@ export class RedditStockWatcherStack extends cdk.Stack {
       },
       logGroup: pollLogGroup,
     });
+
+    // CloudWatch metrics from structured JSON logs
+    const namespace = 'RedditStockWatcher';
+
+    // emailedCount metric
+    new logs.MetricFilter(this, 'EmailsSentMetric', {
+      logGroup: pollLogGroup,
+      filterPattern: logs.FilterPattern.literal('{ $.emailedCount = * }'),
+      metricNamespace: namespace,
+      metricName: 'EmailedCount',
+      metricValue: '$.emailedCount',
+      defaultValue: 0,
+    });
+
+    // LLM itemCount metric (items sent to LLM per run)
+    new logs.MetricFilter(this, 'LlmItemCountMetric', {
+      logGroup: pollLogGroup,
+      filterPattern: logs.FilterPattern.literal('{ $.itemCount = * }'),
+      metricNamespace: namespace,
+      metricName: 'LlmItemCount',
+      metricValue: '$.itemCount',
+      defaultValue: 0,
+    });
+
+    // No emails in 24h alarm
+    const emailsMetric = new cloudwatch.Metric({
+      namespace,
+      metricName: 'EmailedCount',
+      period: cdk.Duration.hours(1),
+      statistic: 'sum',
+    });
+
+    const noEmailsAlarm = new cloudwatch.Alarm(this, 'NoEmails24h', {
+      metric: emailsMetric,
+      evaluationPeriods: 24,
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription: 'No emails sent in the last 24 hours',
+    });
+
+    // SNS topic and email subscription for alerts
+    const alertsTopic = new sns.Topic(this, 'AlertsTopic', {
+      displayName: 'Reddit Stock Watcher Alerts',
+    });
+
+    // Use a deploy-time parameter for alert email (CloudFormation-friendly)
+    const alertEmailParam = new cdk.CfnParameter(this, 'AlertEmail', {
+      type: 'String',
+      description: 'Email address to receive operational alerts',
+    });
+    alertsTopic.addSubscription(new snsSubs.EmailSubscription(alertEmailParam.valueAsString));
+
+    // Alarm: Lambda function errors > 0 in last 5 minutes
+    const errorsMetric = pollFunction.metricErrors({ period: cdk.Duration.minutes(5), statistic: 'sum' });
+    const errorsAlarm = new cloudwatch.Alarm(this, 'LambdaErrors', {
+      metric: errorsMetric,
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      alarmDescription: 'Lambda reported errors in the last 5 minutes',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    // Wire alarms to SNS
+    errorsAlarm.addAlarmAction({ bind: () => ({ alarmActionArn: alertsTopic.topicArn }) });
+    noEmailsAlarm.addAlarmAction({ bind: () => ({ alarmActionArn: alertsTopic.topicArn }) });
 
     // IAM policy for Parameter Store access (least privilege)
     const ssmParamArns = [
