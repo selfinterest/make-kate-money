@@ -9,27 +9,26 @@ export interface Config {
     password: string;
     userAgent: string;
   };
-  
+
   // Supabase
   supabase: {
     url: string;
-    serviceRoleKey: string;
+    apiKey: string;
   };
-  
+
   // LLM
   llm: {
-    provider: 'openai' | 'anthropic';
-    openaiApiKey?: string;
-    anthropicApiKey?: string;
+    provider: 'openai';
+    openaiApiKey: string;
   };
-  
+
   // Email
   email: {
     resendApiKey: string;
     from: string;
     to: string;
   };
-  
+
   // App settings
   app: {
     subreddits: string[];
@@ -59,7 +58,7 @@ function getOptionalEnv(key: string, defaultValue: string = ''): string {
 function getIntEnv(key: string, defaultValue: number): number {
   const value = process.env[key];
   if (!value) return defaultValue;
-  
+
   const parsed = parseInt(value, 10);
   if (isNaN(parsed)) {
     logger.warn('Invalid integer environment variable', { key, value });
@@ -70,18 +69,10 @@ function getIntEnv(key: string, defaultValue: number): number {
 
 export function parseEnv(): Config {
   logger.info('Parsing environment configuration');
-  
+
   try {
-    const llmProvider = getOptionalEnv('LLM_PROVIDER', 'openai') as 'openai' | 'anthropic';
-    
-    // Validate LLM provider and required API key
-    if (llmProvider === 'openai' && !process.env.OPENAI_API_KEY) {
-      throw new Error('OPENAI_API_KEY is required when LLM_PROVIDER=openai');
-    }
-    if (llmProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
-      throw new Error('ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic');
-    }
-    
+    const llmProvider = 'openai' as const;
+
     const config: Config = {
       reddit: {
         clientId: getRequiredEnv('REDDIT_CLIENT_ID'),
@@ -90,24 +81,23 @@ export function parseEnv(): Config {
         password: getRequiredEnv('REDDIT_PASSWORD'),
         userAgent: getRequiredEnv('REDDIT_USER_AGENT'),
       },
-      
+
       supabase: {
         url: getRequiredEnv('SUPABASE_URL'),
-        serviceRoleKey: getRequiredEnv('SUPABASE_SERVICE_ROLE'),
+        apiKey: getRequiredEnv('SUPABASE_API_KEY'),
       },
-      
+
       llm: {
         provider: llmProvider,
-        openaiApiKey: getOptionalEnv('OPENAI_API_KEY'),
-        anthropicApiKey: getOptionalEnv('ANTHROPIC_API_KEY'),
+        openaiApiKey: getRequiredEnv('OPENAI_API_KEY'),
       },
-      
+
       email: {
         resendApiKey: getRequiredEnv('RESEND_API_KEY'),
         from: getRequiredEnv('EMAIL_FROM'),
         to: getRequiredEnv('EMAIL_TO'),
       },
-      
+
       app: {
         subreddits: getOptionalEnv('SUBREDDITS', 'stocks,investing,wallstreetbets,pennystocks').split(','),
         cronWindowMinutes: getIntEnv('CRON_WINDOW_MINUTES', 5),
@@ -118,29 +108,29 @@ export function parseEnv(): Config {
         maxPostsPerRun: getIntEnv('MAX_POSTS_PER_RUN', 120),
       },
     };
-    
+
     // Validate configuration
     if (config.app.llmBatchSize <= 0) {
       throw new Error('LLM_BATCH_SIZE must be greater than 0');
     }
-    
+
     if (config.app.qualityThreshold < 0 || config.app.qualityThreshold > 5) {
       throw new Error('QUALITY_THRESHOLD must be between 0 and 5');
     }
-    
+
     if (config.app.subreddits.length === 0) {
       throw new Error('At least one subreddit must be specified in SUBREDDITS');
     }
-    
+
     logger.info('Configuration parsed successfully', {
       subredditCount: config.app.subreddits.length,
       llmProvider: config.llm.provider,
       batchSize: config.app.llmBatchSize,
       qualityThreshold: config.app.qualityThreshold,
     });
-    
+
     return config;
-    
+
   } catch (error) {
     logger.error('Failed to parse configuration', { error: error instanceof Error ? error.message : 'Unknown error' });
     throw error;

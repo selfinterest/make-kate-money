@@ -42,6 +42,10 @@ INSERT INTO app_meta(key, value) VALUES
   ('last_cursor', jsonb_build_object('created_utc', '1970-01-01T00:00:00Z'))
 ON CONFLICT (key) DO NOTHING;
 
--- Note: For simplicity, use the service role key from serverless functions
--- and keep RLS disabled for these tables. If you need RLS later, add narrow
--- policies and switch to function-invoked RPCs.
+-- Disable RLS for API key access from serverless functions
+-- This is appropriate since only the backend application accesses these tables
+ALTER TABLE reddit_posts DISABLE ROW LEVEL SECURITY;
+ALTER TABLE app_meta DISABLE ROW LEVEL SECURITY;
+
+-- Note: RLS is disabled because this is a backend-only application using
+-- the API key. The data is public Reddit content, not sensitive user data.

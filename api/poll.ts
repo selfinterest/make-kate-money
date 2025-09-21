@@ -20,29 +20,29 @@ interface PollResponse {
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse
-): Promise<VercelResponse<PollResponse>> {
+) {
   const startTime = Date.now();
-  const requestLogger = logger.withContext({ 
+  const requestLogger = logger.withContext({
     requestId: Math.random().toString(36).substr(2, 9),
     method: req.method,
     userAgent: req.headers['user-agent']
   });
-  
+
   requestLogger.info('Poll request started');
-  
+
   // Only allow POST requests (from Vercel Cron) and GET for manual testing
   if (req.method !== 'POST' && req.method !== 'GET') {
     requestLogger.warn('Invalid request method', { method: req.method });
-    return res.status(405).json({ 
-      ok: false, 
-      fetched: 0, 
-      candidates: 0, 
-      llmClassified: 0, 
-      emailed: 0, 
-      error: 'Method not allowed' 
+    return res.status(405).json({
+      ok: false,
+      fetched: 0,
+      candidates: 0,
+      llmClassified: 0,
+      emailed: 0,
+      error: 'Method not allowed'
     });
   }
-  
+
   try {
     // Parse and validate configuration
     const config = parseEnv();
@@ -51,11 +51,11 @@ export default async function handler(
       llmProvider: config.llm.provider,
       maxPosts: config.app.maxPostsPerRun
     });
-    
+
     // Step 1: Get cursor and fetch new posts from Reddit
     const sinceIso = await getCursor(config, 'last_cursor');
     requestLogger.info('Starting Reddit fetch', { sinceIso });
-    
+
     const posts = await fetchNew(
       config,
       config.app.subreddits,
@@ -63,9 +63,9 @@ export default async function handler(
       config.app.cronWindowMinutes,
       config.app.maxPostsPerRun
     );
-    
+
     requestLogger.info('Reddit fetch completed', { postCount: posts.length });
-    
+
     if (posts.length === 0) {
       await setCursor(config, 'last_cursor', []);
       const executionTime = Date.now() - startTime;
@@ -79,25 +79,25 @@ export default async function handler(
         executionTime
       });
     }
-    
+
     // Step 2: Prefilter posts for tickers and upside language
     requestLogger.info('Starting prefilter', { postCount: posts.length });
-    
+
     const allPrefiltered = await prefilterBatch(posts);
-    
+
     // Filter for posts with both tickers and upside hits, and minimum score
-    const candidates = allPrefiltered.filter(p => 
-      p.tickers.length > 0 && 
-      p.upsideHits.length > 0 && 
+    const candidates = allPrefiltered.filter(p =>
+      p.tickers.length > 0 &&
+      p.upsideHits.length > 0 &&
       p.post.score >= config.app.minScoreForLlm
     );
-    
-    requestLogger.info('Prefilter completed', { 
+
+    requestLogger.info('Prefilter completed', {
       totalPosts: posts.length,
       candidateCount: candidates.length,
       minScore: config.app.minScoreForLlm
     });
-    
+
     if (candidates.length === 0) {
       await setCursor(config, 'last_cursor', posts);
       const executionTime = Date.now() - startTime;
@@ -111,7 +111,7 @@ export default async function handler(
         executionTime
       });
     }
-    
+
     // Step 3: Prepare items for LLM classification
     const llmItems = candidates.map(c => ({
       post_id: c.post.id,
@@ -119,48 +119,48 @@ export default async function handler(
       body: (c.post.selftext ?? '').slice(0, config.app.llmMaxBodyChars),
       tickers: c.tickers
     }));
-    
+
     // Step 4: Classify in batches to avoid token limits
-    requestLogger.info('Starting LLM classification', { 
+    requestLogger.info('Starting LLM classification', {
       itemCount: llmItems.length,
       batchSize: config.app.llmBatchSize
     });
-    
+
     const allResults = [];
     for (let i = 0; i < llmItems.length; i += config.app.llmBatchSize) {
       const batch = llmItems.slice(i, i + config.app.llmBatchSize);
-      const batchLogger = requestLogger.withContext({ 
+      const batchLogger = requestLogger.withContext({
         batchIndex: Math.floor(i / config.app.llmBatchSize) + 1,
-        batchSize: batch.length 
+        batchSize: batch.length
       });
-      
+
       try {
         batchLogger.info('Processing LLM batch');
         const batchResults = await classifyBatch(batch, config);
         allResults.push(...batchResults);
         batchLogger.info('LLM batch completed', { resultCount: batchResults.length });
       } catch (error) {
-        batchLogger.error('LLM batch failed', { 
-          error: error instanceof Error ? error.message : 'Unknown error' 
+        batchLogger.error('LLM batch failed', {
+          error: error instanceof Error ? error.message : 'Unknown error'
         });
         // Continue with other batches even if one fails
       }
     }
-    
-    requestLogger.info('LLM classification completed', { 
+
+    requestLogger.info('LLM classification completed', {
       totalResults: allResults.length,
       candidateCount: candidates.length
     });
-    
+
     // Step 5: Store results in database
     await upsertPosts(config, candidates, allResults);
     requestLogger.info('Posts upserted to database');
-    
+
     // Step 6: Select and send email digest
-    const emailCandidates = await selectForEmail(config, { 
-      minQuality: config.app.qualityThreshold 
+    const emailCandidates = await selectForEmail(config, {
+      minQuality: config.app.qualityThreshold
     });
-    
+
     let emailedCount = 0;
     if (emailCandidates.length > 0) {
       try {
@@ -169,21 +169,21 @@ export default async function handler(
         emailedCount = emailCandidates.length;
         requestLogger.info('Email digest sent successfully', { emailedCount });
       } catch (error) {
-        requestLogger.error('Failed to send email digest', { 
+        requestLogger.error('Failed to send email digest', {
           candidateCount: emailCandidates.length,
-          error: error instanceof Error ? error.message : 'Unknown error' 
+          error: error instanceof Error ? error.message : 'Unknown error'
         });
         // Don't fail the entire request if email fails
       }
     } else {
-      requestLogger.info('No posts met email quality threshold', { 
-        threshold: config.app.qualityThreshold 
+      requestLogger.info('No posts met email quality threshold', {
+        threshold: config.app.qualityThreshold
       });
     }
-    
+
     // Step 7: Update cursor
     await setCursor(config, 'last_cursor', posts);
-    
+
     const executionTime = Date.now() - startTime;
     const response: PollResponse = {
       ok: true,
@@ -193,19 +193,19 @@ export default async function handler(
       emailed: emailedCount,
       executionTime
     };
-    
+
     requestLogger.info('Poll request completed successfully', response);
     return res.status(200).json(response);
-    
+
   } catch (error) {
     const executionTime = Date.now() - startTime;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    requestLogger.error('Poll request failed', { 
+
+    requestLogger.error('Poll request failed', {
       error: errorMessage,
       executionTime
     });
-    
+
     return res.status(500).json({
       ok: false,
       fetched: 0,

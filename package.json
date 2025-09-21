@@ -4,7 +4,7 @@
   "description": "Reddit Stock Upside Watcher - Vercel + Supabase + LLM",
   "main": "index.js",
   "scripts": {
-    "dev": "vercel dev",
+    "local": "vercel dev",
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.js",
