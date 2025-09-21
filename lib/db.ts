@@ -207,12 +207,108 @@ export async function selectForEmail(
     }
 
     const candidates = data as EmailCandidate[];
-    logger.info('Selected posts for email', {
-      candidateCount: candidates.length,
-      minQuality: options.minQuality
+
+    // Reputation-aware ranking: compute author and subreddit reputation
+    // Fetch recent history for involved authors and subreddits and compute average quality
+    const authorSet = new Set<string>();
+    const subredditSet = new Set<string>();
+
+    // We need authors and subreddits; fetch them for the candidate posts
+    // Pull minimal extra fields for authors/subreddits lookup
+    const { data: metaRows } = await supabase
+      .from('reddit_posts')
+      .select('post_id, author, subreddit')
+      .in('post_id', candidates.map(c => c.post_id));
+
+    metaRows?.forEach((row: any) => {
+      if (row.author) authorSet.add(row.author);
+      if (row.subreddit) subredditSet.add(row.subreddit);
     });
 
-    return candidates;
+    const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Author history
+    let authorHistory: any[] = [];
+    if (authorSet.size > 0) {
+      const { data: ah } = await supabase
+        .from('reddit_posts')
+        .select('author, quality_score, is_future_upside_claim, stance, created_utc')
+        .in('author', Array.from(authorSet))
+        .gte('created_utc', thirtyDaysAgoIso)
+        .limit(2000);
+      authorHistory = ah ?? [];
+    }
+
+    // Subreddit history
+    let subredditHistory: any[] = [];
+    if (subredditSet.size > 0) {
+      const { data: sh } = await supabase
+        .from('reddit_posts')
+        .select('subreddit, quality_score, is_future_upside_claim, stance, created_utc')
+        .in('subreddit', Array.from(subredditSet))
+        .gte('created_utc', thirtyDaysAgoIso)
+        .limit(5000);
+      subredditHistory = sh ?? [];
+    }
+
+    const authorToAvgQuality = new Map<string, number>();
+    const subredditToAvgQuality = new Map<string, number>();
+
+    if (authorHistory.length > 0) {
+      const sums = new Map<string, { sum: number; count: number }>();
+      authorHistory.forEach(row => {
+        if (row.is_future_upside_claim && row.stance === 'bullish' && typeof row.quality_score === 'number') {
+          const prev = sums.get(row.author) || { sum: 0, count: 0 };
+          prev.sum += row.quality_score;
+          prev.count += 1;
+          sums.set(row.author, prev);
+        }
+      });
+      sums.forEach((v, k) => {
+        authorToAvgQuality.set(k, v.count > 0 ? v.sum / v.count : 0);
+      });
+    }
+
+    if (subredditHistory.length > 0) {
+      const sums = new Map<string, { sum: number; count: number }>();
+      subredditHistory.forEach(row => {
+        if (row.is_future_upside_claim && row.stance === 'bullish' && typeof row.quality_score === 'number') {
+          const prev = sums.get(row.subreddit) || { sum: 0, count: 0 };
+          prev.sum += row.quality_score;
+          prev.count += 1;
+          sums.set(row.subreddit, prev);
+        }
+      });
+      sums.forEach((v, k) => {
+        subredditToAvgQuality.set(k, v.count > 0 ? v.sum / v.count : 0);
+      });
+    }
+
+    // Map candidate post_id to author/subreddit for scoring
+    const idToMeta = new Map<string, { author?: string; subreddit?: string }>();
+    metaRows?.forEach((row: any) => idToMeta.set(row.post_id, { author: row.author, subreddit: row.subreddit }));
+
+    // Compute composite score: base quality + author/subreddit reputation boosts
+    const scored = candidates.map(c => {
+      const meta = idToMeta.get(c.post_id) || {};
+      const authorAvg = meta.author ? authorToAvgQuality.get(meta.author) ?? 0 : 0;
+      const subredditAvg = meta.subreddit ? subredditToAvgQuality.get(meta.subreddit) ?? 0 : 0;
+      const base = typeof (c as any).quality_score === 'number' ? (c as any).quality_score : 0;
+      const score = base + 0.3 * authorAvg + 0.2 * subredditAvg;
+      return { c, score, authorAvg, subredditAvg };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const ranked = scored.map(s => s.c);
+
+    logger.info('Selected posts for email', {
+      candidateCount: candidates.length,
+      minQuality: options.minQuality,
+      authorsConsidered: authorSet.size,
+      subredditsConsidered: subredditSet.size,
+    });
+
+    return ranked;
 
   } catch (error) {
     logger.error('Failed to select posts for email', {
