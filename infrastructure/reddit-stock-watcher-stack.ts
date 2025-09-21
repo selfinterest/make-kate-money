@@ -37,17 +37,32 @@ export class RedditStockWatcherStack extends cdk.Stack {
       logGroup: pollLogGroup,
     });
 
-    // IAM policy for Parameter Store access
+    // IAM policy for Parameter Store access (least privilege)
+    const ssmParamArns = [
+      'REDDIT_CLIENT_ID',
+      'REDDIT_CLIENT_SECRET',
+      'REDDIT_USERNAME',
+      'REDDIT_PASSWORD',
+      'SUPABASE_URL',
+      'SUPABASE_API_KEY',
+      'OPENAI_API_KEY',
+      'RESEND_API_KEY',
+      'EMAIL_FROM',
+      'EMAIL_TO',
+      'SUBREDDITS',
+      'LLM_PROVIDER',
+      'LLM_BATCH_SIZE',
+      'MIN_SCORE_FOR_LLM',
+      'QUALITY_THRESHOLD',
+      'MAX_POSTS_PER_RUN',
+      'CRON_WINDOW_MINUTES',
+      'LLM_MAX_BODY_CHARS',
+    ].map(name => `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/${name}`);
+
     pollFunction.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: [
-        'ssm:GetParameter',
-        'ssm:GetParameters',
-        'ssm:GetParametersByPath'
-      ],
-      resources: [
-        `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/*`
-      ]
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: ssmParamArns,
     }));
 
     // EventBridge rule for 5-minute schedule
