@@ -5,9 +5,11 @@ analyzes them with LLM, and sends email digests.
 
 ## Architecture
 
-- **Runtime**: TypeScript/Node.js on Vercel serverless functions
-- **Cron**: Vercel Cron (every 5 minutes)
+- **Runtime**: TypeScript/Node.js on AWS Lambda  
+- **Scheduler**: EventBridge Rules (every 5 minutes)
+- **Infrastructure**: AWS CDK
 - **Database**: Supabase Postgres
+- **Configuration**: AWS Systems Manager Parameter Store
 - **LLM**: OpenAI GPT-4o-mini (configurable)
 - **Email**: Resend
 - **Reddit API**: snoowrap
@@ -27,11 +29,12 @@ analyzes them with LLM, and sends email digests.
 ### 1. Prerequisites
 
 - Node.js 18+
+- AWS CLI configured with appropriate permissions
+- AWS CDK CLI installed (`npm install -g aws-cdk`)
 - Supabase account
 - Reddit API credentials (script app)
 - OpenAI API key
 - Resend account
-- Vercel account
 
 ### 2. Reddit API Setup
 
@@ -45,21 +48,32 @@ analyzes them with LLM, and sends email digests.
 2. Run the SQL schema in `schema.sql` in your SQL editor
 3. Note your project URL and API key from Settings → API
 
-### 4. Environment Variables
+### 4. AWS Setup
 
-Copy `.env.example` to `.env` and fill in your values:
+#### Install CDK dependencies:
 
 ```bash
-cp .env.example .env
+npm install
 ```
 
-Required variables:
+#### Bootstrap CDK (first time only):
 
-- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`,
-  `REDDIT_PASSWORD`
-- `SUPABASE_URL`, `SUPABASE_API_KEY`
-- `OPENAI_API_KEY`
-- `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_TO`
+```bash
+cdk bootstrap
+```
+
+#### Deploy the stack:
+
+```bash
+npm run deploy
+```
+
+This will create:
+- Lambda function 
+- EventBridge rule (5-minute schedule)
+- Parameter Store parameters (with placeholder values)
+- IAM roles and policies
+- CloudWatch log groups
 
 ### 5. Asset Files
 
@@ -79,53 +93,78 @@ Example format:
 ["ON", "ALL", "FOR", "IT", "OR", "ANY", "ONE", "META", ...]
 ```
 
-### 6. Local Development
+### 6. Configure Parameters
 
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run locally with Vercel dev server:
+After deployment, you need to update the Parameter Store values with your actual configuration:
 
 ```bash
-npm run dev
+aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_CLIENT_ID" --value "YOUR_CLIENT_ID" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_CLIENT_SECRET" --value "YOUR_CLIENT_SECRET" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_USERNAME" --value "YOUR_USERNAME" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_PASSWORD" --value "YOUR_PASSWORD" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/SUPABASE_URL" --value "YOUR_SUPABASE_URL" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/SUPABASE_API_KEY" --value "YOUR_SUPABASE_KEY" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/OPENAI_API_KEY" --value "YOUR_OPENAI_KEY" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/RESEND_API_KEY" --value "YOUR_RESEND_KEY" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/EMAIL_FROM" --value "your-email@domain.com" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/EMAIL_TO" --value "target@domain.com" --overwrite
 ```
 
-Test the endpoint:
+Optional parameters (with defaults):
+```bash
+aws ssm put-parameter --name "/reddit-stock-watcher/SUBREDDITS" --value "stocks,investing,wallstreetbets,pennystocks" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/LLM_BATCH_SIZE" --value "10" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/MIN_SCORE_FOR_LLM" --value "1" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/QUALITY_THRESHOLD" --value "3" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/MAX_POSTS_PER_RUN" --value "120" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/CRON_WINDOW_MINUTES" --value "5" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/LLM_MAX_BODY_CHARS" --value "2000" --overwrite
+```
+
+### 7. Testing
+
+Test the Lambda function directly:
 
 ```bash
-curl http://localhost:3000/api/poll
+aws lambda invoke --function-name RedditStockWatcherStack-PollFunction* --payload '{}' response.json
+cat response.json
 ```
-
-### 7. Deployment
-
-Deploy to Vercel:
-
-```bash
-npm run deploy
-```
-
-Or connect your GitHub repo to Vercel for automatic deployments.
-
-**Important**: Add all environment variables in Vercel dashboard under Project
-Settings → Environment Variables.
 
 ### 8. Monitoring
 
-The application includes structured logging. Monitor your Vercel function logs
-to track:
+The application includes structured logging. Monitor your Lambda function logs in CloudWatch:
 
+```bash
+aws logs tail --follow /aws/lambda/RedditStockWatcherStack-PollFunction*
+```
+
+Track:
 - Posts fetched from Reddit
-- Candidates passing prefilter
+- Candidates passing prefilter  
 - LLM classification results
 - Email digest status
 - Execution times
 
+### 9. Management
+
+View EventBridge rules:
+```bash
+aws events list-rules --name-prefix RedditStockWatcherStack
+```
+
+Update deployment:
+```bash
+npm run deploy
+```
+
+Clean up resources:
+```bash
+npm run cdk:destroy
+```
+
 ## Configuration
 
-Key settings in environment variables:
+Key settings in Parameter Store:
 
 - `SUBREDDITS`: Comma-separated list of subreddits to monitor
 - `LLM_BATCH_SIZE`: Posts per LLM batch (default: 10)
@@ -142,9 +181,9 @@ Key settings in environment variables:
 5. **Email**: Sends digest of high-quality bullish posts
 6. **Cursor**: Updates timestamp cursor for next run
 
-## API Response
+## Lambda Response
 
-The `/api/poll` endpoint returns:
+The Lambda function returns:
 
 ```json
 {

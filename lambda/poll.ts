@@ -1,11 +1,11 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { parseEnv } from '@/lib/config';
-import { fetchNew } from '@/lib/reddit';
-import { prefilterBatch } from '@/lib/prefilter';
-import { classifyBatch } from '@/lib/llm';
-import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '@/lib/db';
-import { sendDigest } from '@/lib/email';
-import { logger } from '@/lib/logger';
+import type { EventBridgeEvent, Context } from 'aws-lambda';
+import { parseEnv } from '../lib/config';
+import { fetchNew } from '../lib/reddit';
+import { prefilterBatch } from '../lib/prefilter';
+import { classifyBatch } from '../lib/llm';
+import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '../lib/db';
+import { sendDigest } from '../lib/email';
+import { logger } from '../lib/logger';
 
 interface PollResponse {
   ok: boolean;
@@ -17,35 +17,22 @@ interface PollResponse {
   executionTime?: number;
 }
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-) {
+export async function handler(
+  event: EventBridgeEvent<string, any>,
+  context: Context
+): Promise<PollResponse> {
   const startTime = Date.now();
   const requestLogger = logger.withContext({
-    requestId: Math.random().toString(36).substr(2, 9),
-    method: req.method,
-    userAgent: req.headers['user-agent']
+    requestId: context.awsRequestId,
+    functionName: context.functionName,
+    source: event.source
   });
 
   requestLogger.info('Poll request started');
 
-  // Only allow POST requests (from Vercel Cron) and GET for manual testing
-  if (req.method !== 'POST' && req.method !== 'GET') {
-    requestLogger.warn('Invalid request method', { method: req.method });
-    return res.status(405).json({
-      ok: false,
-      fetched: 0,
-      candidates: 0,
-      llmClassified: 0,
-      emailed: 0,
-      error: 'Method not allowed'
-    });
-  }
-
   try {
     // Parse and validate configuration
-    const config = parseEnv();
+    const config = await parseEnv();
     requestLogger.info('Configuration loaded', {
       subreddits: config.app.subreddits,
       llmProvider: config.llm.provider,
@@ -70,14 +57,14 @@ export default async function handler(
       await setCursor(config, 'last_cursor', []);
       const executionTime = Date.now() - startTime;
       requestLogger.info('No new posts found, ending early', { executionTime });
-      return res.status(200).json({
+      return {
         ok: true,
         fetched: 0,
         candidates: 0,
         llmClassified: 0,
         emailed: 0,
         executionTime
-      });
+      };
     }
 
     // Step 2: Prefilter posts for tickers and upside language
@@ -102,14 +89,14 @@ export default async function handler(
       await setCursor(config, 'last_cursor', posts);
       const executionTime = Date.now() - startTime;
       requestLogger.info('No candidates found after prefilter', { executionTime });
-      return res.status(200).json({
+      return {
         ok: true,
         fetched: posts.length,
         candidates: 0,
         llmClassified: 0,
         emailed: 0,
         executionTime
-      });
+      };
     }
 
     // Step 3: Prepare items for LLM classification
@@ -195,7 +182,7 @@ export default async function handler(
     };
 
     requestLogger.info('Poll request completed successfully', response);
-    return res.status(200).json(response);
+    return response;
 
   } catch (error) {
     const executionTime = Date.now() - startTime;
@@ -206,7 +193,7 @@ export default async function handler(
       executionTime
     });
 
-    return res.status(500).json({
+    return {
       ok: false,
       fetched: 0,
       candidates: 0,
@@ -214,6 +201,6 @@ export default async function handler(
       emailed: 0,
       error: errorMessage,
       executionTime
-    });
+    };
   }
 }
