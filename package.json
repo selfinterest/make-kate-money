@@ -21,13 +21,17 @@
     "snoowrap": "^1.23.0"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.152",
     "@types/node": "^20.10.4",
     "@typescript-eslint/eslint-plugin": "^6.13.2",
     "@typescript-eslint/parser": "^6.13.2",
     "aws-cdk": "^2.100.0",
     "aws-cdk-lib": "^2.100.0",
+    "aws-lambda": "^1.0.7",
     "constructs": "^10.3.0",
+    "esbuild": "^0.25.10",
     "eslint": "^8.55.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   },
   "engines": {

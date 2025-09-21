@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaNode from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -13,25 +14,18 @@ export class RedditStockWatcherStack extends cdk.Stack {
     super(scope, id, props);
 
     // Lambda function for polling Reddit
-    const pollFunction = new lambda.Function(this, 'PollFunction', {
+    const pollFunction = new lambdaNode.NodejsFunction(this, 'PollFunction', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'lambda/poll.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '..'), {
-        exclude: [
-          'node_modules',
-          'cdk.out',
-          'infrastructure',
-          '.git',
-          '*.md',
-          'tsconfig.json',
-          'cdk.json',
-          'package*.json'
-        ]
-      }),
+      entry: path.join(__dirname, '..', 'lambda', 'poll.ts'),
+      handler: 'handler',
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node18',
+      },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       environment: {
-        // Environment variables will be set via Parameter Store references
         NODE_ENV: 'production',
       },
       logRetention: logs.RetentionDays.ONE_MONTH,
@@ -62,7 +56,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
     // Parameter Store parameters for configuration
     const parameterNames = [
       'REDDIT_CLIENT_ID',
-      'REDDIT_CLIENT_SECRET', 
+      'REDDIT_CLIENT_SECRET',
       'REDDIT_USERNAME',
       'REDDIT_PASSWORD',
       'SUPABASE_URL',

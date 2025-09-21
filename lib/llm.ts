@@ -1,7 +1,7 @@
 import Ajv from 'ajv';
 import { logger } from './logger';
 import type { Config } from './config';
-import llmSchema from '@/assets/llm_schema.json';
+import llmSchema from '../assets/llm_schema.json';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validate = ajv.compile(llmSchema as any);

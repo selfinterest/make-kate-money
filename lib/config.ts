@@ -51,11 +51,11 @@ async function loadParameters(): Promise<Record<string, string>> {
   }
 
   const ssmClient = new SSMClient({ region: process.env.AWS_REGION || 'us-east-1' });
-  
+
   const parameterNames = [
     '/reddit-stock-watcher/REDDIT_CLIENT_ID',
     '/reddit-stock-watcher/REDDIT_CLIENT_SECRET',
-    '/reddit-stock-watcher/REDDIT_USERNAME', 
+    '/reddit-stock-watcher/REDDIT_USERNAME',
     '/reddit-stock-watcher/REDDIT_PASSWORD',
     '/reddit-stock-watcher/SUPABASE_URL',
     '/reddit-stock-watcher/SUPABASE_API_KEY',
@@ -74,26 +74,41 @@ async function loadParameters(): Promise<Record<string, string>> {
   ];
 
   try {
-    const command = new GetParametersCommand({
-      Names: parameterNames,
-      WithDecryption: true
-    });
+    // SSM GetParameters supports max 10 names per request
+    const chunkSize = 10;
+    const chunks: string[][] = [];
+    for (let i = 0; i < parameterNames.length; i += chunkSize) {
+      chunks.push(parameterNames.slice(i, i + chunkSize));
+    }
 
-    const response = await ssmClient.send(command);
-    
     parameterCache = {};
-    response.Parameters?.forEach(param => {
-      if (param.Name && param.Value) {
-        // Convert /reddit-stock-watcher/KEY to KEY
-        const key = param.Name.split('/').pop();
-        if (key) {
-          parameterCache![key] = param.Value;
-        }
-      }
-    });
 
-    logger.info('Loaded parameters from Parameter Store', { 
-      parameterCount: Object.keys(parameterCache).length 
+    for (const namesChunk of chunks) {
+      const command = new GetParametersCommand({
+        Names: namesChunk,
+        WithDecryption: true,
+      });
+
+      const response = await ssmClient.send(command);
+
+      response.Parameters?.forEach(param => {
+        if (param.Name && param.Value) {
+          const key = param.Name.split('/').pop();
+          if (key) {
+            parameterCache![key] = param.Value;
+          }
+        }
+      });
+
+      if (response.InvalidParameters && response.InvalidParameters.length > 0) {
+        logger.warn('Some parameters were not found in Parameter Store', {
+          invalid: response.InvalidParameters,
+        });
+      }
+    }
+
+    logger.info('Loaded parameters from Parameter Store', {
+      parameterCount: Object.keys(parameterCache).length,
     });
 
     return parameterCache;

@@ -4,6 +4,7 @@ import { fetchNew } from '../lib/reddit';
 import { prefilterBatch } from '../lib/prefilter';
 import { classifyBatch } from '../lib/llm';
 import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '../lib/db';
+import type { EmailCandidate } from '../lib/db';
 import { sendDigest } from '../lib/email';
 import { logger } from '../lib/logger';
 
@@ -38,6 +39,32 @@ export async function handler(
       llmProvider: config.llm.provider,
       maxPosts: config.app.maxPostsPerRun
     });
+
+    // Optional: test email path
+    const testEmailFlag = (event as any)?.testEmail ?? (event as any)?.detail?.testEmail;
+    if (testEmailFlag) {
+      requestLogger.info('Test email flag detected; sending test email');
+      const nowIso = new Date().toISOString();
+      const sample: EmailCandidate = {
+        post_id: 'test-post',
+        title: 'Test email from Reddit Stock Watcher',
+        url: 'https://example.com/test',
+        reason: 'This is a test of the email pipeline.',
+        detected_tickers: ['TEST'],
+        quality_score: 5,
+        created_utc: nowIso,
+      };
+      await sendDigest([sample], config);
+      const executionTime = Date.now() - startTime;
+      return {
+        ok: true,
+        fetched: 0,
+        candidates: 0,
+        llmClassified: 0,
+        emailed: 1,
+        executionTime,
+      };
+    }
 
     // Step 1: Get cursor and fetch new posts from Reddit
     const sinceIso = await getCursor(config, 'last_cursor');
