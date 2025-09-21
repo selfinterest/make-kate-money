@@ -14,21 +14,27 @@ export class RedditStockWatcherStack extends cdk.Stack {
     super(scope, id, props);
 
     // Lambda function for polling Reddit
+    const pollLogGroup = new logs.LogGroup(this, 'PollFunctionLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+    });
+
     const pollFunction = new lambdaNode.NodejsFunction(this, 'PollFunction', {
       runtime: lambda.Runtime.NODEJS_18_X,
+      architecture: lambda.Architecture.ARM_64,
       entry: path.join(__dirname, '..', 'lambda', 'poll.ts'),
       handler: 'handler',
       bundling: {
         minify: true,
         sourceMap: false,
         target: 'node18',
+        define: { 'process.env.NODE_ENV': '"production"' },
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
       environment: {
         NODE_ENV: 'production',
       },
-      logRetention: logs.RetentionDays.ONE_MONTH,
+      logGroup: pollLogGroup,
     });
 
     // IAM policy for Parameter Store access
