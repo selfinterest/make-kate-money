@@ -5,7 +5,7 @@ analyzes them with LLM, and sends email digests.
 
 ## Architecture
 
-- **Runtime**: TypeScript/Node.js on AWS Lambda  
+- **Runtime**: TypeScript/Node.js on AWS Lambda
 - **Scheduler**: EventBridge Rules (every 5 minutes)
 - **Infrastructure**: AWS CDK
 - **Database**: Supabase Postgres
@@ -66,10 +66,13 @@ cdk bootstrap
 
 ```bash
 npm run deploy
+
+## AWS_PROFILE=AdministratorAccess cdk deploy --require-approval never --parameters AlertEmail="$(AWS_PROFILE=AdministratorAccess aws ssm get-parameter --with-decryption --name /reddit-stock-watcher/EMAIL_TO --query Parameter.Value --output text)"
 ```
 
 This will create:
-- Lambda function 
+
+- Lambda function
 - EventBridge rule (5-minute schedule)
 - Parameter Store parameters (with placeholder values)
 - IAM roles and policies
@@ -95,7 +98,8 @@ Example format:
 
 ### 6. Configure Parameters
 
-After deployment, you need to update the Parameter Store values with your actual configuration:
+After deployment, you need to update the Parameter Store values with your actual
+configuration:
 
 ```bash
 aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_CLIENT_ID" --value "YOUR_CLIENT_ID" --overwrite
@@ -111,6 +115,7 @@ aws ssm put-parameter --name "/reddit-stock-watcher/EMAIL_TO" --value "target@do
 ```
 
 Optional parameters (with defaults):
+
 ```bash
 aws ssm put-parameter --name "/reddit-stock-watcher/SUBREDDITS" --value "stocks,investing,wallstreetbets,pennystocks" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/LLM_BATCH_SIZE" --value "10" --overwrite
@@ -132,15 +137,17 @@ cat response.json
 
 ### 8. Monitoring
 
-The application includes structured logging. Monitor your Lambda function logs in CloudWatch:
+The application includes structured logging. Monitor your Lambda function logs
+in CloudWatch:
 
 ```bash
 aws logs tail --follow /aws/lambda/RedditStockWatcherStack-PollFunction*
 ```
 
 Track:
+
 - Posts fetched from Reddit
-- Candidates passing prefilter  
+- Candidates passing prefilter
 - LLM classification results
 - Email digest status
 - Execution times
@@ -148,16 +155,19 @@ Track:
 ### 9. Management
 
 View EventBridge rules:
+
 ```bash
 aws events list-rules --name-prefix RedditStockWatcherStack
 ```
 
 Update deployment:
+
 ```bash
 npm run deploy
 ```
 
 Clean up resources:
+
 ```bash
 npm run cdk:destroy
 ```

@@ -43,6 +43,20 @@
       "minimum": 0,
       "maximum": 5,
       "description": "Evidence strength and clarity score from 0-5"
+    },
+    "evidence_phrases": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 140
+      },
+      "description": "Short quotes from the post that justify the prediction"
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Model confidence in the correctness of the classification (0-5)"
     }
   },
   "additionalProperties": false

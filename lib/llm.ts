@@ -23,9 +23,19 @@ export interface LlmResult {
 }
 
 const SYSTEM_PROMPT = `You are a precise financial-forum reader.
-Determine if the author makes a forward-looking claim that a stock will go up.
-Summarize the rationale in ≤2 sentences.
-Do not give financial advice.
+
+Definition of a prediction: ONLY when the author asserts a future UPWARD direction for a specific ticker using explicit forward-looking language (e.g., "will go up", "going to rise", "expect X to increase"). Mere hype/slang ("moon", "send it") IS NOT a prediction unless paired with an explicit forward-looking verb near a ticker.
+
+Rules:
+- is_future_upside_claim = true ONLY if:
+  (a) explicit forward-looking verb (will/going to/expect) AND
+  (b) upward direction AND
+  (c) linked to a specific mentioned ticker.
+- Conditional/hedged language ("might", "could", "if X then") without a clear base-case assertion => is_future_upside_claim=false and stance="unclear".
+- Slang (moon, gap up, send it) counts ONLY as supporting evidence when (a)+(b)+(c) are present.
+- Require at least one concrete rationale phrase (event/catalyst/valuation). If none, set is_future_upside_claim=false.
+- Never invent tickers; restrict to provided detected tickers.
+
 Return STRICT JSON that conforms to the provided schema.`;
 
 function createUserPrompt(item: LlmItem): string {
@@ -41,6 +51,8 @@ Return JSON with keys:
 - reason: string (<= 2 sentences)
 - tickers: array of uppercase tickers (subset of detected; exclude false positives)
 - quality_score: integer 0..5 (evidence strength & clarity)
+- evidence_phrases: array of short quotes that justify the prediction
+- confidence: integer 0..5 (model confidence)
 
 Rules:
 - Phrases like "moon", "gap up", "send it", "breakout" count as bullish claims.
