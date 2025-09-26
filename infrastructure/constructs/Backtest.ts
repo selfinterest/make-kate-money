@@ -25,7 +25,7 @@ export class BacktestConstruct extends Construct {
         });
 
         this.func = new lambdaNode.NodejsFunction(this, 'Function', {
-            runtime: lambda.Runtime.NODEJS_18_X,
+            runtime: lambda.Runtime.NODEJS_20_X,
             architecture: lambda.Architecture.ARM_64,
             entry: path.join(__dirname, '..', '..', 'lambda', 'backtest.ts'),
             handler: 'handler',

@@ -35,6 +35,11 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'CRON_WINDOW_MINUTES',
       'LLM_MAX_BODY_CHARS',
       'TARGET_EMAILS_PER_DAY',
+      'ALPHA_VANTAGE_API_KEY',
+      'BACKTEST_TP_PCT',
+      'BACKTEST_SL_PCT',
+      'BACKTEST_HOURS',
+      'BACKTEST_MAX_TICKERS_PER_RUN',
     ].map(name => `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/${name}`);
 
     const poll = new PollConstruct(this, 'Poll', { ssmParamArns });
@@ -66,6 +71,11 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'CRON_WINDOW_MINUTES',
       'LLM_MAX_BODY_CHARS'
       , 'TARGET_EMAILS_PER_DAY'
+      , 'ALPHA_VANTAGE_API_KEY'
+      , 'BACKTEST_TP_PCT'
+      , 'BACKTEST_SL_PCT'
+      , 'BACKTEST_HOURS'
+      , 'BACKTEST_MAX_TICKERS_PER_RUN'
     ];
 
     // Create SSM parameters (will need to be populated manually)
