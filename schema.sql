@@ -49,3 +49,18 @@ ALTER TABLE app_meta DISABLE ROW LEVEL SECURITY;
 
 -- Note: RLS is disabled because this is a backend-only application using
 -- the API key. The data is public Reddit content, not sensitive user data.
+
+-- Price cache for backtesting (Alpha Vantage daily or intraday aggregates)
+CREATE TABLE IF NOT EXISTS prices (
+  ticker TEXT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  open NUMERIC,
+  high NUMERIC,
+  low NUMERIC,
+  close NUMERIC,
+  PRIMARY KEY (ticker, ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prices_ticker_ts ON prices (ticker, ts DESC);
+
+ALTER TABLE prices DISABLE ROW LEVEL SECURITY;
