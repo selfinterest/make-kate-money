@@ -22,6 +22,7 @@ analyzes them with LLM, and sends email digests.
 - 💾 Stores results in Postgres with deduplication
 - 📧 Sends quality-filtered email digests
 - 📊 Structured logging for monitoring
+- 🧮 Generates two-week performance reports with Tiingo pricing and S3 archival
 - ⚡ Stateless and idempotent design
 
 ## Setup
@@ -72,8 +73,9 @@ npm run deploy
 
 This will create:
 
-- Lambda function
-- EventBridge rule (5-minute schedule)
+- Poller Lambda (5-minute schedule via EventBridge)
+- Backtest Lambda for nightly threshold tuning
+- Performance-report Lambda plus versioned S3 bucket
 - Parameter Store parameters (with placeholder values)
 - IAM roles and policies
 - CloudWatch log groups
@@ -109,6 +111,7 @@ aws ssm put-parameter --name "/reddit-stock-watcher/REDDIT_PASSWORD" --value "YO
 aws ssm put-parameter --name "/reddit-stock-watcher/SUPABASE_URL" --value "YOUR_SUPABASE_URL" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/SUPABASE_API_KEY" --value "YOUR_SUPABASE_KEY" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/OPENAI_API_KEY" --value "YOUR_OPENAI_KEY" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/TIINGO_API_KEY" --value "YOUR_TIINGO_KEY" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/RESEND_API_KEY" --value "YOUR_RESEND_KEY" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/EMAIL_FROM" --value "your-email@domain.com" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/EMAIL_TO" --value "target@domain.com" --overwrite

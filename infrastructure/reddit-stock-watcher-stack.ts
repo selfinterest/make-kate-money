@@ -5,6 +5,7 @@ import { Construct } from 'constructs';
 import { PollConstruct } from './constructs/Poll';
 import { BacktestConstruct } from './constructs/Backtest';
 import { AlertsConstruct } from './constructs/Alerts';
+import { PerformanceReportConstruct } from './constructs/PerformanceReport';
 
 export class RedditStockWatcherStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -40,6 +41,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'BACKTEST_SL_PCT',
       'BACKTEST_HOURS',
       'BACKTEST_MAX_TICKERS_PER_RUN',
+      'TIINGO_API_KEY',
     ].map(name => `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/${name}`);
 
     const poll = new PollConstruct(this, 'Poll', { ssmParamArns });
@@ -48,6 +50,10 @@ export class RedditStockWatcherStack extends cdk.Stack {
     const backtest = new BacktestConstruct(this, 'Backtest', {
       ssmParamArns,
       qualityThresholdArn: `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/QUALITY_THRESHOLD`,
+    });
+
+    const performance = new PerformanceReportConstruct(this, 'PerformanceReport', {
+      ssmParamArns,
     });
 
     // Parameter Store parameters for configuration
@@ -76,6 +82,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
       , 'BACKTEST_SL_PCT'
       , 'BACKTEST_HOURS'
       , 'BACKTEST_MAX_TICKERS_PER_RUN'
+      , 'TIINGO_API_KEY'
     ];
 
     // Create SSM parameters (will need to be populated manually)
@@ -108,6 +115,11 @@ export class RedditStockWatcherStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ParameterPrefix', {
       value: '/reddit-stock-watcher/',
       description: 'Parameter Store prefix for configuration values'
+    });
+
+    new cdk.CfnOutput(this, 'PerformanceReportBucket', {
+      value: performance.bucket.bucketName,
+      description: 'S3 bucket storing performance reports',
     });
   }
 }
