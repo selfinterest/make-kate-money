@@ -24,14 +24,14 @@ export class PollConstruct extends Construct {
         });
 
         this.func = new lambdaNode.NodejsFunction(this, 'Function', {
-            runtime: lambda.Runtime.NODEJS_18_X,
+            runtime: lambda.Runtime.NODEJS_20_X,
             architecture: lambda.Architecture.ARM_64,
             entry: path.join(__dirname, '..', '..', 'lambda', 'poll.ts'),
             handler: 'handler',
             bundling: {
                 minify: true,
                 sourceMap: false,
-                target: 'node18',
+                target: 'node20',
                 define: { 'process.env.NODE_ENV': '"production"' },
             },
             timeout: cdk.Duration.minutes(5),

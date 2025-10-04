@@ -32,7 +32,7 @@ export class BacktestConstruct extends Construct {
             bundling: {
                 minify: true,
                 sourceMap: false,
-                target: 'node18',
+                target: 'node20',
                 define: { 'process.env.NODE_ENV': '"production"' },
             },
             timeout: cdk.Duration.minutes(2),
