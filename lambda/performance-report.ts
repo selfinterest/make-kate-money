@@ -261,9 +261,20 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
       }
     }
 
+    // Dedupe: keep only the first emailed post per ticker within the selected ET day
+    const dedupedCandidates: PositionCandidate[] = [];
+    const seenTickers = new Set<string>();
+    for (const c of candidates) {
+      if (seenTickers.has(c.ticker)) continue;
+      seenTickers.add(c.ticker);
+      dedupedCandidates.push(c);
+    }
+
+    log.info('Deduped candidates by ticker', { before: candidates.length, after: dedupedCandidates.length });
+
     const tickerWindows = new Map<string, { start: Date; end: Date }>();
 
-    for (const candidate of candidates) {
+    for (const candidate of dedupedCandidates) {
       if (!candidate.entryTime) {
         continue;
       }
@@ -306,7 +317,7 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
 
     const positions: PositionReport[] = [];
 
-    for (const candidate of candidates) {
+    for (const candidate of dedupedCandidates) {
       const { entryTime, ...rest } = candidate;
       const baseReport: PositionReport = {
         ...rest,
