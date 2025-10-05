@@ -64,7 +64,7 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
         const slPct = Number((await readParam('/reddit-stock-watcher/BACKTEST_SL_PCT')) ?? '0.02');
         const horizonHours = Number((await readParam('/reddit-stock-watcher/BACKTEST_HOURS')) ?? '24');
         const maxTickers = Number((await readParam('/reddit-stock-watcher/BACKTEST_MAX_TICKERS_PER_RUN')) ?? '10');
-        const apiKey = await readParam('/reddit-stock-watcher/ALPHA_VANTAGE_API_KEY');
+        const tiingoApiKey = config.marketData.tiingoApiKey;
 
         // Build ticker set (cap to limit API hits)
         const tickerSet = new Set<string>();
@@ -79,7 +79,7 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
         }
 
         // Ensure we have cached prices for these tickers (daily adjusted)
-        if (apiKey && tickerSet.size > 0) {
+        if (tiingoApiKey && tickerSet.size > 0) {
             const toFetch: string[] = [];
             const cutoffMs = Date.now() - 2 * 24 * 60 * 60 * 1000; // refresh if last bar older than ~2 days
             for (const t of tickerSet) {
@@ -87,7 +87,12 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
                 if (!latest || latest < cutoffMs) toFetch.push(t);
             }
             if (toFetch.length > 0) {
-                await fetchAndCacheDailyPrices(toFetch, apiKey, supabase);
+                await fetchAndCacheDailyPrices({
+                    tickers: toFetch,
+                    tiingoApiKey,
+                    supabase,
+                    horizonDays: Math.max(1, Math.ceil(horizonHours / 24)) + 2,
+                });
             }
         }
 
@@ -237,45 +242,79 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
 }
 
 
-async function fetchAndCacheDailyPrices(tickers: string[], apiKey: string, supabase: ReturnType<typeof getSupabaseClient>) {
-    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-    let count = 0;
+interface FetchAndCacheInputs {
+    tickers: string[];
+    tiingoApiKey: string;
+    supabase: ReturnType<typeof getSupabaseClient>;
+    horizonDays: number;
+}
+
+async function fetchAndCacheDailyPrices({ tickers, tiingoApiKey, supabase, horizonDays }: FetchAndCacheInputs) {
+    const fetchFn = (globalThis as any).fetch as ((input: string, init?: any) => Promise<any>) | undefined;
+    if (typeof fetchFn !== 'function') {
+        throw new Error('global fetch is not available in this runtime');
+    }
+
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const earliestNeeded = new Date(today);
+    earliestNeeded.setUTCDate(earliestNeeded.getUTCDate() - Math.max(30, horizonDays * 3));
+    const startDate = earliestNeeded.toISOString().slice(0, 10);
+
     for (const ticker of tickers) {
+        const params = new URLSearchParams({
+            token: tiingoApiKey,
+            startDate,
+            resampleFreq: 'daily',
+        });
+        const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ticker)}/prices?${params.toString()}`;
+
         try {
-            const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY_ADJUSTED&symbol=${encodeURIComponent(ticker)}&outputsize=compact&apikey=${encodeURIComponent(apiKey)}`;
-            // Use global fetch (Node 18)
-            const res = await (globalThis as any).fetch(url);
-            if (!res || !res.ok) { await sleep(1500); continue; }
-            const json = await res.json();
-            const series = json['Time Series (Daily)'] || {};
-            const rows: any[] = [];
-            for (const dateStr of Object.keys(series)) {
-                const rec = series[dateStr];
-                rows.push({
-                    ticker,
-                    ts: new Date(dateStr).toISOString(),
-                    open: Number(rec['1. open']),
-                    high: Number(rec['2. high']),
-                    low: Number(rec['3. low']),
-                    close: Number(rec['4. close']),
-                });
+            const res = await fetchFn(url);
+            if (!res.ok) {
+                const body = await res.text();
+                logger.warn('Tiingo daily fetch failed', { ticker, status: res.status, statusText: res.statusText, body: body?.slice(0, 200) });
+                await sleep(500);
+                continue;
             }
+
+            const json = await res.json();
+            if (!Array.isArray(json)) {
+                logger.warn('Unexpected Tiingo daily response shape', { ticker });
+                await sleep(300);
+                continue;
+            }
+
+            const rows = json
+                .filter((row: any) => row?.date)
+                .map((row: any) => ({
+                    ticker,
+                    ts: new Date(row.date).toISOString(),
+                    open: typeof row.open === 'number' ? row.open : Number(row.open ?? NaN),
+                    high: typeof row.high === 'number' ? row.high : Number(row.high ?? NaN),
+                    low: typeof row.low === 'number' ? row.low : Number(row.low ?? NaN),
+                    close: typeof row.close === 'number' ? row.close : Number(row.close ?? NaN),
+                }))
+                .filter((row: any) => Number.isFinite(row.open) && Number.isFinite(row.high) && Number.isFinite(row.low) && Number.isFinite(row.close));
+
             if (rows.length > 0) {
-                // Upsert in chunks to stay under row limits
                 const chunkSize = 500;
                 for (let i = 0; i < rows.length; i += chunkSize) {
                     const chunk = rows.slice(i, i + chunkSize);
                     const { error } = await supabase.from('prices').upsert(chunk as any, { onConflict: 'ticker,ts' });
-                    if (error) break;
+                    if (error) {
+                        logger.warn('Failed to upsert Tiingo daily prices', { ticker, error: error.message });
+                        break;
+                    }
                 }
             }
-        } catch {
-            // ignore and continue
+        } catch (error) {
+            logger.warn('Tiingo daily fetch threw', { ticker, error: error instanceof Error ? error.message : 'unknown' });
         }
-        // Alpha Vantage free limit ~5 req/min; be kind
-        count++;
-        if (count % 5 === 0) await sleep(60_000);
-        else await sleep(1500);
+
+        await sleep(250); // stay well below Tiingo rate limits
     }
 }
 
@@ -289,4 +328,3 @@ async function getLatestPriceTs(ticker: string, supabase: ReturnType<typeof getS
     if (error || !data || data.length === 0) return null;
     return new Date((data[0] as any).ts).getTime();
 }
-
