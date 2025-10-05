@@ -26,6 +26,7 @@ export interface DatabasePost {
   created_utc: string;
   score: number;
   detected_tickers: string[];
+  llm_tickers: string[];
   is_future_upside_claim: boolean | null;
   stance: string | null;
   reason: string | null;
@@ -39,6 +40,8 @@ export interface EmailCandidate {
   title: string;
   url: string;
   reason: string;
+  tickers: string[];
+  llm_tickers: string[];
   detected_tickers: string[];
   quality_score: number;
   created_utc: string;
@@ -150,6 +153,7 @@ export async function upsertPosts(
         created_utc: candidate.post.createdUtc,
         score: candidate.post.score,
         detected_tickers: candidate.tickers,
+        llm_tickers: llmResult?.tickers ?? [],
         is_future_upside_claim: llmResult?.is_future_upside_claim ?? null,
         stance: llmResult?.stance ?? null,
         reason: llmResult?.reason ?? null,
@@ -195,7 +199,7 @@ export async function selectForEmail(
 
     const { data, error } = await supabase
       .from('reddit_posts')
-      .select('post_id, title, url, reason, detected_tickers, quality_score, created_utc')
+      .select('post_id, title, url, reason, detected_tickers, llm_tickers, quality_score, created_utc')
       .is('emailed_at', null)
       .eq('is_future_upside_claim', true)
       .eq('stance', 'bullish')
@@ -206,7 +210,21 @@ export async function selectForEmail(
       throw error;
     }
 
-    const candidates = data as EmailCandidate[];
+    const candidates: EmailCandidate[] = (data ?? []).map(row => {
+      const llmTickers = Array.isArray((row as any).llm_tickers)
+        ? ((row as any).llm_tickers as string[])
+        : [];
+      const detectedTickers = Array.isArray((row as any).detected_tickers)
+        ? ((row as any).detected_tickers as string[])
+        : [];
+
+      return {
+        ...(row as any),
+        llm_tickers: llmTickers,
+        detected_tickers: detectedTickers,
+        tickers: llmTickers.length > 0 ? llmTickers : detectedTickers,
+      };
+    });
 
     // Reputation-aware ranking: compute author and subreddit reputation
     // Fetch recent history for involved authors and subreddits and compute average quality

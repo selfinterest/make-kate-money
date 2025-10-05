@@ -1,11 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import { PollConstruct } from './constructs/Poll';
 import { BacktestConstruct } from './constructs/Backtest';
 import { AlertsConstruct } from './constructs/Alerts';
 import { PerformanceReportConstruct } from './constructs/PerformanceReport';
+import { BackfillLlmTickersConstruct } from './constructs/BackfillLlmTickers';
 
 export class RedditStockWatcherStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -50,6 +50,10 @@ export class RedditStockWatcherStack extends cdk.Stack {
     const backtest = new BacktestConstruct(this, 'Backtest', {
       ssmParamArns,
       qualityThresholdArn: `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/QUALITY_THRESHOLD`,
+    });
+
+    const backfill = new BackfillLlmTickersConstruct(this, 'BackfillLlmTickers', {
+      ssmParamArns,
     });
 
     const performance = new PerformanceReportConstruct(this, 'PerformanceReport', {
@@ -110,6 +114,16 @@ export class RedditStockWatcherStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'FunctionArn', {
       value: poll.func.functionArn,
       description: 'ARN of the Lambda function'
+    });
+
+    new cdk.CfnOutput(this, 'BackfillFunctionName', {
+      value: backfill.func.functionName,
+      description: 'Manual backfill Lambda function for LLM tickers'
+    });
+
+    new cdk.CfnOutput(this, 'BackfillFunctionArn', {
+      value: backfill.func.functionArn,
+      description: 'ARN of the LLM ticker backfill Lambda'
     });
 
     new cdk.CfnOutput(this, 'ParameterPrefix', {

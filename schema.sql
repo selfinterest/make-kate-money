@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS reddit_posts (
   created_utc TIMESTAMPTZ NOT NULL,
   score INT DEFAULT 0,
   detected_tickers TEXT[] DEFAULT '{}',   -- from prefilter
+  llm_tickers TEXT[] DEFAULT '{}',        -- refined tickers from LLM
 
   -- LLM outputs
   is_future_upside_claim BOOLEAN,
@@ -29,6 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_created ON reddit_posts (created_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_email ON reddit_posts (emailed_at);
 CREATE INDEX IF NOT EXISTS idx_posts_quality ON reddit_posts (is_future_upside_claim, stance, quality_score);
 CREATE INDEX IF NOT EXISTS idx_posts_tickers ON reddit_posts USING GIN (detected_tickers);
+CREATE INDEX IF NOT EXISTS idx_posts_llm_tickers ON reddit_posts USING GIN (llm_tickers);
 
 -- Application metadata table for storing cursors and other state
 CREATE TABLE IF NOT EXISTS app_meta (
