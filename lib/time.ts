@@ -23,11 +23,14 @@ const WEEKDAY_MAP: Record<string, number> = {
 
 function parseOffset(offsetLabel: string | undefined): number {
   if (!offsetLabel) return 0;
-  const match = offsetLabel.match(/GMT([+-]\d{2})(?::?(\d{2}))?/);
+  // Supports formats like "GMT-4", "GMT-04", "GMT-04:00"
+  const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
   if (!match) return 0;
-  const sign = match[1].startsWith('-') ? -1 : 1;
-  const hours = Math.abs(parseInt(match[1], 10));
-  const minutes = match[2] ? parseInt(match[2], 10) : 0;
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = parseInt(match[2], 10);
+  const minutes = match[3] ? parseInt(match[3], 10) : 0;
+  if (!Number.isFinite(hours) || hours < 0 || hours > 14) return 0;
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes >= 60) return 0;
   return sign * (hours * 60 + minutes);
 }
 

@@ -16,6 +16,7 @@ interface LambdaEvent {
 interface SupabaseRow {
   post_id: string;
   title: string;
+  body?: string | null;
   author: string | null;
   url: string;
   detected_tickers: string[] | null;
@@ -51,6 +52,28 @@ function sanitizeTicker(raw: unknown): string | null {
   if (!/^[A-Z\.]+$/.test(trimmed)) return null;
   return trimmed;
 }
+
+function appearsInTitleAsTicker(title: string, ticker: string): boolean {
+  if (!title) return false;
+  // Allow cashtag in any case, but bare ticker must be uppercase in source
+  const cashtag = new RegExp(`\\$${ticker}\\b`, 'i');
+  const bareUpper = new RegExp(`\\b${ticker}\\b`);
+  return cashtag.test(title) || bareUpper.test(title);
+}
+
+function appearsInTextAsTicker(title: string, body: string | null | undefined, ticker: string): boolean {
+  const text = `${title}\n${body ?? ''}`;
+  if (!text) return false;
+  const cashtag = new RegExp(`\\$${ticker}\\b`, 'i');
+  const bareUpper = new RegExp(`\\b${ticker}\\b`);
+  return cashtag.test(text) || bareUpper.test(text);
+}
+
+// Some tokens are common English words and generate legacy false positives.
+// For these, require explicit presence in the text; otherwise trust detected_tickers.
+const AMBIGUOUS_TICKERS = new Set<string>([
+  'CAN', 'ARE', 'ALL', 'FOR', 'RUN', 'EDIT', 'IT', 'ON', 'OR', 'ANY', 'ONE', 'AI', 'EV', 'DD'
+]);
 
 function nextTradingDayStart(day: Date): Date {
   let candidate = addDays(day, 1);
@@ -98,6 +121,52 @@ function ensurePrice(value?: number): number | null {
   return null;
 }
 
+async function findNearestLookbackDayWithEmails(
+  supabase: ReturnType<typeof getSupabaseClient>,
+  startEtDayStart: Date,
+  runEtDayStart: Date,
+  maxBackDays: number,
+  logCtx: ReturnType<typeof logger.withContext>
+): Promise<{ selected: Date; shiftedBy: number }> {
+  for (let delta = 0; delta <= maxBackDays; delta += 1) {
+    const candidates: Array<{ date: Date; shift: number }> = [];
+    // Prefer exact, then previous days, then forward days, per delta ordering
+    candidates.push({ date: addDays(startEtDayStart, -delta), shift: -delta });
+    if (delta > 0) {
+      const forward = addDays(startEtDayStart, delta);
+      // Do not go beyond the run day (can't look into the future window)
+      if (forward.getTime() < runEtDayStart.getTime()) {
+        candidates.push({ date: forward, shift: delta });
+      }
+    }
+
+    for (const c of candidates) {
+      const next = addDays(c.date, 1);
+      const { data, error } = await supabase
+        .from('reddit_posts')
+        .select('post_id')
+        .not('emailed_at', 'is', null)
+        .gte('emailed_at', c.date.toISOString())
+        .lt('emailed_at', next.toISOString())
+        .limit(1);
+      if (error) {
+        throw error;
+      }
+      if ((data ?? []).length > 0) {
+        if (c.shift !== 0) {
+          logCtx.info('Adjusted lookback ET day to nearest with emails', {
+            requestedEtStart: startEtDayStart.toISOString(),
+            selectedEtStart: c.date.toISOString(),
+            shiftedByDays: c.shift,
+          });
+        }
+        return { selected: c.date, shiftedBy: c.shift };
+      }
+    }
+  }
+  return { selected: startEtDayStart, shiftedBy: 0 };
+}
+
 export async function handler(event: LambdaEvent, context: Context): Promise<ReportPayload> {
   const start = Date.now();
   const log = logger.withContext({ requestId: context.awsRequestId, fn: 'performance-report' });
@@ -113,7 +182,23 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
     }
 
     const runDayStart = startOfEasternDay(runBase);
-    const lookbackDayStart = addDays(runDayStart, -14);
+    let lookbackDayStart = addDays(runDayStart, -14);
+    // If the target day is a weekend, shift to the previous trading day
+    while (isEasternWeekend(lookbackDayStart)) {
+      lookbackDayStart = addDays(lookbackDayStart, -1);
+    }
+
+    // Probe up to 7 days back to find the nearest ET day with any emailed posts
+    const { selected: selectedLookbackStart } = await findNearestLookbackDayWithEmails(
+      supabase,
+      lookbackDayStart,
+      runDayStart,
+      7,
+      log
+    );
+
+    lookbackDayStart = selectedLookbackStart;
+    const lookbackDayEnd = addDays(lookbackDayStart, 1);
 
     const runComponents = getEasternComponents(runDayStart);
     const lookbackComponents = getEasternComponents(lookbackDayStart);
@@ -122,14 +207,15 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
     log.info('Generating performance report', {
       runDay: runDayStart.toISOString(),
       lookbackDay: lookbackDayStart.toISOString(),
+      supabaseUrl: config.supabase.url,
     });
 
     const { data, error } = await supabase
       .from('reddit_posts')
-      .select('post_id, title, author, url, detected_tickers, reason, emailed_at, created_utc, subreddit')
+      .select('post_id, title, body, author, url, detected_tickers, reason, emailed_at, created_utc, subreddit')
       .not('emailed_at', 'is', null)
       .gte('emailed_at', lookbackDayStart.toISOString())
-      .lt('emailed_at', runCloseTarget.toISOString())
+      .lt('emailed_at', lookbackDayEnd.toISOString())
       .order('emailed_at', { ascending: true });
 
     if (error) {
@@ -137,13 +223,20 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
     }
 
     const rows: SupabaseRow[] = (data ?? []) as SupabaseRow[];
+    log.info('Supabase query completed', { rowCount: rows.length });
 
     const candidates: PositionCandidate[] = [];
 
     for (const row of rows) {
       const tickers = (row.detected_tickers ?? [])
         .map(sanitizeTicker)
-        .filter((t): t is string => Boolean(t));
+        .filter((t): t is string => Boolean(t))
+        .filter(t => {
+          if (AMBIGUOUS_TICKERS.has(t)) {
+            return appearsInTextAsTicker(row.title, row.body, t);
+          }
+          return true;
+        });
 
       if (!tickers.length) {
         continue;
