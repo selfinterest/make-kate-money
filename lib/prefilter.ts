@@ -96,7 +96,6 @@ export async function prefilter(post: Post): Promise<Prefiltered> {
   const { tickers: tickerSet, stoplist: stopSet } = await loadAssets();
 
   const combinedText = `${post.title}\n${post.selftext ?? ''}`;
-  const upperText = combinedText.toUpperCase();
   const lowerText = combinedText.toLowerCase();
 
   logger.debug('Prefiltering post', {
@@ -105,23 +104,24 @@ export async function prefilter(post: Post): Promise<Prefiltered> {
     bodyLength: post.selftext?.length ?? 0
   });
 
-  // 1) Find cashtags ($SYMBOL)
-  const cashtagMatches = upperText.match(CASHTAG) || [];
+  // 1) Find cashtags ($SYMBOL) — case-insensitive symbol, normalized to upper
+  const cashtagMatches = (combinedText.match(/\$[A-Za-z]{1,5}\b/g) || []);
   const detectedTickers = new Set<string>();
 
   cashtagMatches.forEach(match => {
-    const ticker = match.slice(1); // Remove $ prefix
+    const ticker = match.slice(1).toUpperCase(); // Remove $ prefix and normalize
     if (tickerSet.has(ticker) && !stopSet.has(ticker)) {
       detectedTickers.add(ticker);
     }
   });
 
-  // 2) Find bare tickers (SYMBOL as standalone words)
-  const bareTickerMatches = upperText.match(BARE_TICKER) || [];
+  // 2) Find bare tickers (SYMBOL as standalone words) — only match if text is already ALL CAPS in source
+  const bareTickerMatches = combinedText.match(BARE_TICKER) || [];
 
   bareTickerMatches.forEach(match => {
-    if (tickerSet.has(match) && !stopSet.has(match)) {
-      detectedTickers.add(match);
+    const ticker = match.toUpperCase();
+    if (tickerSet.has(ticker) && !stopSet.has(ticker)) {
+      detectedTickers.add(ticker);
     }
   });
 

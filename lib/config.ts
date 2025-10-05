@@ -23,6 +23,11 @@ export interface Config {
     openaiApiKey: string;
   };
 
+  // Market data
+  marketData: {
+    tiingoApiKey: string;
+  };
+
   // Email
   email: {
     resendApiKey: string;
@@ -70,7 +75,8 @@ async function loadParameters(): Promise<Record<string, string>> {
     '/reddit-stock-watcher/QUALITY_THRESHOLD',
     '/reddit-stock-watcher/MAX_POSTS_PER_RUN',
     '/reddit-stock-watcher/CRON_WINDOW_MINUTES',
-    '/reddit-stock-watcher/LLM_MAX_BODY_CHARS'
+    '/reddit-stock-watcher/LLM_MAX_BODY_CHARS',
+    '/reddit-stock-watcher/TIINGO_API_KEY'
   ];
 
   try {
@@ -170,6 +176,10 @@ export async function parseEnv(): Promise<Config> {
       llm: {
         provider: llmProvider,
         openaiApiKey: getRequiredParam(params, 'OPENAI_API_KEY'),
+      },
+
+      marketData: {
+        tiingoApiKey: getRequiredParam(params, 'TIINGO_API_KEY'),
       },
 
       email: {

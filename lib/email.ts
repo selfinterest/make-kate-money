@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { logger } from './logger';
 import type { Config } from './config';
 import type { EmailCandidate } from './db';
+import type { PerformanceEmailPayload } from './performance-types';
 
 let resendClient: Resend | null = null;
 
@@ -71,6 +72,147 @@ export async function sendDigest(
       error: error instanceof Error ? error.message : 'Unknown error'
     });
     throw new Error(`Email send failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function sendPerformanceReportEmail(
+  payload: PerformanceEmailPayload,
+  config: Config
+): Promise<void> {
+  const resend = getResendClient(config);
+
+  try {
+    const summary = payload.report;
+    const subject = `📊 Performance — ${summary.lookbackDateEt} ➜ ${summary.runDateEt}`;
+
+    const topWinners = [...payload.completed]
+      .sort((a, b) => b.returnPct - a.returnPct)
+      .slice(0, 5);
+
+    const topLosers = [...payload.completed]
+      .sort((a, b) => a.returnPct - b.returnPct)
+      .slice(0, 5);
+
+    const textLines: string[] = [];
+    textLines.push(subject, '');
+    textLines.push(`Run date (ET): ${summary.runDateEt}`);
+    textLines.push(`Lookback date (ET): ${summary.lookbackDateEt}`);
+    textLines.push(`Positions: ${summary.completedPositions}/${summary.totalPositions} completed`);
+    const avgReturnStr = summary.averageReturnPct !== null ? `${summary.averageReturnPct.toFixed(2)}%` : 'n/a';
+    const winRateStr = summary.winRatePct !== null ? `${summary.winRatePct.toFixed(2)}%` : 'n/a';
+    textLines.push(`Net P&L: $${summary.netProfitUsd.toFixed(2)} (${avgReturnStr} avg return)`);
+    textLines.push(`Win rate: ${winRateStr}`);
+    textLines.push(`Download: ${payload.downloadUrl}`);
+    textLines.push('', 'Top Winners:');
+    if (!topWinners.length) {
+      textLines.push('  (none)');
+    } else {
+      for (const item of topWinners) {
+        textLines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
+        textLines.push(`    Link: ${item.url}`);
+      }
+    }
+    textLines.push('', 'Top Losers:');
+    if (!topLosers.length) {
+      textLines.push('  (none)');
+    } else {
+      for (const item of topLosers) {
+        textLines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
+        textLines.push(`    Link: ${item.url}`);
+      }
+    }
+    if (payload.errors.length) {
+      textLines.push('', 'Tickers with missing data:');
+      for (const err of payload.errors) {
+        textLines.push(`  ${err.ticker}: ${err.error} — ${err.title}`);
+        textLines.push(`    Link: ${err.url}`);
+      }
+    }
+    const text = textLines.join('\n');
+
+    const htmlSections: string[] = [];
+    htmlSections.push(`<h1>📊 Performance Report — ${escapeHtml(summary.lookbackDateEt)} ➜ ${escapeHtml(summary.runDateEt)}</h1>`);
+    htmlSections.push('<ul>');
+    htmlSections.push(`<li><strong>Run date (ET):</strong> ${escapeHtml(summary.runDateEt)}</li>`);
+    htmlSections.push(`<li><strong>Lookback (ET):</strong> ${escapeHtml(summary.lookbackDateEt)}</li>`);
+    htmlSections.push(`<li><strong>Positions:</strong> ${summary.completedPositions}/${summary.totalPositions} completed</li>`);
+    htmlSections.push(`<li><strong>Net P&amp;L:</strong> $${summary.netProfitUsd.toFixed(2)} (<strong>${escapeHtml(avgReturnStr)}</strong> avg return)</li>`);
+    htmlSections.push(`<li><strong>Win rate:</strong> ${escapeHtml(winRateStr)}</li>`);
+    htmlSections.push(`<li><strong>Download:</strong> <a href="${payload.downloadUrl}">JSON report</a></li>`);
+    htmlSections.push('</ul>');
+
+    const renderTable = (title: string, rows: typeof payload.completed) => {
+      if (!rows.length) {
+        return `<h2>${escapeHtml(title)}</h2><p>(none)</p>`;
+      }
+      const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
+      const header = `<tr>
+          <th ${cellStyle}>Ticker</th>
+          <th ${cellStyle}>Return %</th>
+          <th ${cellStyle}>P&L</th>
+          <th ${cellStyle}>Entry</th>
+          <th ${cellStyle}>Exit</th>
+          <th ${cellStyle}>Post</th>
+        </tr>`;
+      const body = rows.map(item => `
+        <tr>
+          <td ${cellStyle}>${escapeHtml(item.ticker)}</td>
+          <td ${cellStyle}>${item.returnPct.toFixed(2)}%</td>
+          <td ${cellStyle}>$${item.profitUsd.toFixed(2)}</td>
+          <td ${cellStyle}>${item.entryPrice ? `$${item.entryPrice.toFixed(2)}` : '—'}</td>
+          <td ${cellStyle}>${item.exitPrice ? `$${item.exitPrice.toFixed(2)}` : '—'}</td>
+          <td ${cellStyle}><a href="${item.url}">${escapeHtml(item.title)}</a></td>
+        </tr>
+      `).join('');
+      return `<h2>${escapeHtml(title)}</h2><table style="width:100%; border-collapse:collapse;">${header}${body}</table>`;
+    };
+
+    htmlSections.push(renderTable('Top Winners', topWinners));
+    htmlSections.push(renderTable('Top Losers', topLosers));
+
+    if (payload.errors.length) {
+      const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
+      const rows = payload.errors.map(err => `
+        <tr>
+          <td ${cellStyle}>${escapeHtml(err.ticker)}</td>
+          <td ${cellStyle}>${escapeHtml(err.error)}</td>
+          <td ${cellStyle}><a href="${err.url}">${escapeHtml(err.title)}</a></td>
+        </tr>
+      `).join('');
+      const header = `<tr>
+          <th ${cellStyle}>Ticker</th>
+          <th ${cellStyle}>Error</th>
+          <th ${cellStyle}>Post</th>
+        </tr>`;
+      htmlSections.push('<h2>Tickers With Missing Data</h2>');
+      htmlSections.push(`<table style="width:100%; border-collapse:collapse;">${header}${rows}</table>`);
+    }
+
+    htmlSections.push('<hr><p style="font-size: 0.9em; color: #666;"><em>This simulation allocates $1,000 per ticker at the entry price noted. This is not investment advice.</em></p>');
+    const html = htmlSections.join('\n');
+
+    const result = await resend.emails.send({
+      from: config.email.from,
+      to: config.email.to,
+      subject,
+      text,
+      html,
+    });
+
+    if (result.error) {
+      throw new Error(`Resend API error: ${result.error.message}`);
+    }
+
+    logger.info('Performance report email sent', {
+      emailId: result.data?.id,
+      completed: payload.completed.length,
+      errors: payload.errors.length,
+    });
+  } catch (error) {
+    logger.error('Failed to send performance report email', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
   }
 }
 

@@ -45,6 +45,7 @@ Required:
 - `/reddit-stock-watcher/RESEND_API_KEY`
 - `/reddit-stock-watcher/EMAIL_FROM`
 - `/reddit-stock-watcher/EMAIL_TO`
+- `/reddit-stock-watcher/TIINGO_API_KEY`
 
 App knobs:
 
@@ -76,6 +77,8 @@ Alerting:
 - Poller: `rate(5 minutes)` → triggers `lambda/poll.ts`
 - Backtest: `cron(5 2 * * ? *)` → runs nightly at 02:05 UTC to tune
   `QUALITY_THRESHOLD`
+- Performance report: `cron(30 22 * * ? *)` → generates two-week P&L summary after
+  U.S. market close (>=18:30 ET)
 - (Optional) PriceFetcher: `cron(30 1 * * ? *)` → pre-warms Alpha Vantage prices
   cache
 
