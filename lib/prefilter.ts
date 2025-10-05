@@ -1,5 +1,6 @@
 import { logger } from './logger';
 import type { Post } from './reddit';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
 // These will be loaded from assets files that user will provide
 let TICKERS: Set<string> | null = null;
@@ -49,6 +50,35 @@ export interface Prefiltered {
   upsideHits: string[];
 }
 
+async function loadTickersFromS3(bucket: string): Promise<string[]> {
+  try {
+    const s3 = new S3Client({});
+    const response = await s3.send(new GetObjectCommand({
+      Bucket: bucket,
+      Key: 'tickers/current.json',
+    }));
+
+    if (!response.Body) {
+      throw new Error('No body in S3 response');
+    }
+
+    const body = await response.Body.transformToString();
+    const tickers = JSON.parse(body);
+
+    if (!Array.isArray(tickers)) {
+      throw new Error('Invalid tickers format in S3');
+    }
+
+    logger.debug('Loaded tickers from S3', { count: tickers.length });
+    return tickers;
+  } catch (error) {
+    logger.warn('Failed to load tickers from S3', {
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    throw error;
+  }
+}
+
 async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<string> }> {
   if (TICKERS && STOPLIST) {
     return { tickers: TICKERS, stoplist: STOPLIST };
@@ -57,19 +87,62 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
   try {
     logger.debug('Loading ticker and stoplist assets');
 
-    // Load tickers from assets file
-    const tickersModule = await import('../assets/tickers.json');
-    const tickers = Array.isArray(tickersModule.default) ? tickersModule.default : tickersModule;
-    TICKERS = new Set<string>(tickers);
+    let tickers: string[] = [];
 
-    // Load stoplist from assets file
-    const stoplistModule = await import('../assets/stoplist.json');
-    const stoplist = Array.isArray(stoplistModule.default) ? stoplistModule.default : stoplistModule;
+    // Try to load tickers from S3 first (if TICKERS_BUCKET is available)
+    const tickersBucket = process.env.TICKERS_BUCKET;
+    if (tickersBucket) {
+      try {
+        tickers = await loadTickersFromS3(tickersBucket);
+        logger.info('Loaded tickers from S3', { count: tickers.length });
+      } catch (error) {
+        logger.warn('Failed to load tickers from S3, falling back to static file', {
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        // Fall through to static file loading
+      }
+    }
+
+    // If S3 loading failed or bucket not configured, try static file
+    if (tickers.length === 0) {
+      try {
+        const tickersModule = await import('../assets/tickers.json');
+        tickers = Array.isArray(tickersModule.default) ? tickersModule.default : tickersModule;
+        logger.info('Loaded tickers from static file', { count: tickers.length });
+      } catch (error) {
+        logger.error('Failed to load tickers from static file', {
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        // Will fall through to fallback logic below
+      }
+    }
+
+    // Load stoplist from static file (this doesn't change frequently)
+    let stoplist: string[] = [];
+    try {
+      const stoplistModule = await import('../assets/stoplist.json');
+      stoplist = Array.isArray(stoplistModule.default) ? stoplistModule.default : stoplistModule;
+      logger.debug('Loaded stoplist from static file', { count: stoplist.length });
+    } catch (error) {
+      logger.warn('Failed to load stoplist from static file, using default', {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      stoplist = ['ON', 'ALL', 'FOR', 'IT', 'OR', 'ANY', 'ONE', 'META', 'SHOP', 'RUN', 'EDIT', 'EV', 'AI'];
+    }
+
+    // If we still don't have tickers, use empty set as fallback
+    if (tickers.length === 0) {
+      logger.warn('No tickers loaded, using empty set');
+      tickers = [];
+    }
+
+    TICKERS = new Set<string>(tickers);
     STOPLIST = new Set<string>(stoplist);
 
     logger.info('Assets loaded successfully', {
       tickerCount: TICKERS.size,
-      stoplistCount: STOPLIST.size
+      stoplistCount: STOPLIST.size,
+      source: tickersBucket ? 'S3' : 'static'
     });
 
     return { tickers: TICKERS, stoplist: STOPLIST };

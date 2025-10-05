@@ -6,6 +6,7 @@ import { BacktestConstruct } from './constructs/Backtest';
 import { AlertsConstruct } from './constructs/Alerts';
 import { PerformanceReportConstruct } from './constructs/PerformanceReport';
 import { BackfillLlmTickersConstruct } from './constructs/BackfillLlmTickers';
+import { UpdateTickersConstruct } from './constructs/UpdateTickers';
 
 export class RedditStockWatcherStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -44,7 +45,6 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'TIINGO_API_KEY',
     ].map(name => `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/${name}`);
 
-    const poll = new PollConstruct(this, 'Poll', { ssmParamArns });
 
     // Nightly Backtest Lambda to auto-tune QUALITY_THRESHOLD
     const backtest = new BacktestConstruct(this, 'Backtest', {
@@ -58,6 +58,16 @@ export class RedditStockWatcherStack extends cdk.Stack {
 
     const performance = new PerformanceReportConstruct(this, 'PerformanceReport', {
       ssmParamArns,
+    });
+
+    const updateTickers = new UpdateTickersConstruct(this, 'UpdateTickers', {
+      ssmParamArns,
+    });
+
+    // Update Poll construct to use tickers bucket
+    const poll = new PollConstruct(this, 'Poll', { 
+      ssmParamArns,
+      tickersBucket: updateTickers.bucket,
     });
 
     // Parameter Store parameters for configuration
@@ -134,6 +144,16 @@ export class RedditStockWatcherStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'PerformanceReportBucket', {
       value: performance.bucket.bucketName,
       description: 'S3 bucket storing performance reports',
+    });
+
+    new cdk.CfnOutput(this, 'TickersBucket', {
+      value: updateTickers.bucket.bucketName,
+      description: 'S3 bucket storing ticker lists',
+    });
+
+    new cdk.CfnOutput(this, 'UpdateTickersFunctionName', {
+      value: updateTickers.func.functionName,
+      description: 'Name of the ticker update Lambda function',
     });
   }
 }
