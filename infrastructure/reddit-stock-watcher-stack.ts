@@ -36,6 +36,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'MAX_POSTS_PER_RUN',
       'CRON_WINDOW_MINUTES',
       'LLM_MAX_BODY_CHARS',
+      'MIN_VOTES_PER_MINUTE_FOR_LLM',
       'TARGET_EMAILS_PER_DAY',
       'ALPHA_VANTAGE_API_KEY',
       'BACKTEST_TP_PCT',
@@ -89,7 +90,8 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'QUALITY_THRESHOLD',
       'MAX_POSTS_PER_RUN',
       'CRON_WINDOW_MINUTES',
-      'LLM_MAX_BODY_CHARS'
+      'LLM_MAX_BODY_CHARS',
+      'MIN_VOTES_PER_MINUTE_FOR_LLM'
       , 'TARGET_EMAILS_PER_DAY'
       , 'ALPHA_VANTAGE_API_KEY'
       , 'BACKTEST_TP_PCT'

@@ -18,6 +18,16 @@ interface PollResponse {
   executionTime?: number;
 }
 
+function computeVotesPerMinute(createdUtc: string, score: number, referenceMs: number): number {
+  const createdMs = new Date(createdUtc).getTime();
+  if (Number.isNaN(createdMs)) {
+    return 0;
+  }
+
+  const ageMinutes = Math.max((referenceMs - createdMs) / 60000, 1 / 60);
+  return score / ageMinutes;
+}
+
 export async function handler(
   event: EventBridgeEvent<string, any>,
   context: Context
@@ -101,17 +111,45 @@ export async function handler(
 
     const allPrefiltered = await prefilterBatch(posts);
 
-    // Filter for posts with both tickers and upside hits, and minimum score
-    const candidates = allPrefiltered.filter(p =>
-      p.tickers.length > 0 &&
-      p.upsideHits.length > 0 &&
-      p.post.score >= config.app.minScoreForLlm
-    );
+    const nowMs = Date.now();
+    const candidates: typeof allPrefiltered = [];
+    let scoreQualified = 0;
+    let velocityQualified = 0;
+    let acceptedVelocitySum = 0;
+
+    for (const item of allPrefiltered) {
+      if (item.tickers.length === 0 || item.upsideHits.length === 0) {
+        continue;
+      }
+
+      const votesPerMinute = computeVotesPerMinute(item.post.createdUtc, item.post.score, nowMs);
+      const passesScore = item.post.score >= config.app.minScoreForLlm;
+      const passesVelocity = votesPerMinute >= config.app.minVotesPerMinuteForLlm;
+
+      if (passesScore) {
+        scoreQualified += 1;
+      }
+
+      if (passesVelocity) {
+        velocityQualified += 1;
+      }
+
+      if (passesScore || passesVelocity) {
+        candidates.push(item);
+        acceptedVelocitySum += votesPerMinute;
+      }
+    }
+
+    const averageVotesPerMinute = candidates.length > 0 ? acceptedVelocitySum / candidates.length : 0;
 
     requestLogger.info('Prefilter completed', {
       totalPosts: posts.length,
       candidateCount: candidates.length,
-      minScore: config.app.minScoreForLlm
+      minScore: config.app.minScoreForLlm,
+      minVotesPerMinute: config.app.minVotesPerMinuteForLlm,
+      scoreQualified,
+      velocityQualified,
+      averageVotesPerMinute: Number(averageVotesPerMinute.toFixed(2))
     });
 
     if (candidates.length === 0) {

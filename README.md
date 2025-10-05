@@ -123,6 +123,7 @@ Optional parameters (with defaults):
 aws ssm put-parameter --name "/reddit-stock-watcher/SUBREDDITS" --value "stocks,investing,wallstreetbets,pennystocks" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/LLM_BATCH_SIZE" --value "10" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/MIN_SCORE_FOR_LLM" --value "1" --overwrite
+aws ssm put-parameter --name "/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM" --value "0.5" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/QUALITY_THRESHOLD" --value "3" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/MAX_POSTS_PER_RUN" --value "120" --overwrite
 aws ssm put-parameter --name "/reddit-stock-watcher/CRON_WINDOW_MINUTES" --value "5" --overwrite

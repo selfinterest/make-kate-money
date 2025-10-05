@@ -44,6 +44,7 @@ export interface Config {
     minScoreForLlm: number;
     qualityThreshold: number;
     maxPostsPerRun: number;
+    minVotesPerMinuteForLlm: number;
   };
 }
 
@@ -76,7 +77,8 @@ async function loadParameters(): Promise<Record<string, string>> {
     '/reddit-stock-watcher/MAX_POSTS_PER_RUN',
     '/reddit-stock-watcher/CRON_WINDOW_MINUTES',
     '/reddit-stock-watcher/LLM_MAX_BODY_CHARS',
-    '/reddit-stock-watcher/TIINGO_API_KEY'
+    '/reddit-stock-watcher/TIINGO_API_KEY',
+    '/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM'
   ];
 
   try {
@@ -152,6 +154,18 @@ function getIntParam(params: Record<string, string>, key: string, defaultValue: 
   return parsed;
 }
 
+function getFloatParam(params: Record<string, string>, key: string, defaultValue: number): number {
+  const value = params[key];
+  if (!value || value === 'REPLACE_ME') return defaultValue;
+
+  const parsed = parseFloat(value);
+  if (Number.isNaN(parsed)) {
+    logger.warn('Invalid float parameter', { key, value });
+    return defaultValue;
+  }
+  return parsed;
+}
+
 export async function parseEnv(): Promise<Config> {
   logger.info('Parsing environment configuration');
 
@@ -196,6 +210,7 @@ export async function parseEnv(): Promise<Config> {
         minScoreForLlm: getIntParam(params, 'MIN_SCORE_FOR_LLM', 1),
         qualityThreshold: getIntParam(params, 'QUALITY_THRESHOLD', 3),
         maxPostsPerRun: getIntParam(params, 'MAX_POSTS_PER_RUN', 120),
+        minVotesPerMinuteForLlm: getFloatParam(params, 'MIN_VOTES_PER_MINUTE_FOR_LLM', 0.5),
       },
     };
 
@@ -212,11 +227,16 @@ export async function parseEnv(): Promise<Config> {
       throw new Error('At least one subreddit must be specified in SUBREDDITS');
     }
 
+    if (config.app.minVotesPerMinuteForLlm < 0) {
+      throw new Error('MIN_VOTES_PER_MINUTE_FOR_LLM must be non-negative');
+    }
+
     logger.info('Configuration parsed successfully', {
       subredditCount: config.app.subreddits.length,
       llmProvider: config.llm.provider,
       batchSize: config.app.llmBatchSize,
       qualityThreshold: config.app.qualityThreshold,
+      minVotesPerMinuteForLlm: config.app.minVotesPerMinuteForLlm,
     });
 
     return config;
