@@ -6,10 +6,12 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as path from 'path';
 
 export interface PollConstructProps {
     ssmParamArns: string[];
+    tickersBucket?: s3.IBucket;
 }
 
 export class PollConstruct extends Construct {
@@ -38,6 +40,7 @@ export class PollConstruct extends Construct {
             memorySize: 512,
             environment: {
                 NODE_ENV: 'production',
+                ...(props.tickersBucket && { TICKERS_BUCKET: props.tickersBucket.bucketName }),
             },
             logGroup: this.logGroup,
         });
@@ -48,6 +51,11 @@ export class PollConstruct extends Construct {
             actions: ['ssm:GetParameter', 'ssm:GetParameters'],
             resources: props.ssmParamArns,
         }));
+
+        // Grant S3 read access to tickers bucket if provided
+        if (props.tickersBucket) {
+            props.tickersBucket.grantRead(this.func);
+        }
 
         // 5-minute schedule
         const rule = new events.Rule(this, 'Schedule', {
