@@ -20,6 +20,7 @@ interface SupabaseRow {
   author: string | null;
   url: string;
   detected_tickers: string[] | null;
+  llm_tickers: string[] | null;
   reason: string | null;
   emailed_at: string;
   created_utc: string;
@@ -52,28 +53,6 @@ function sanitizeTicker(raw: unknown): string | null {
   if (!/^[A-Z\.]+$/.test(trimmed)) return null;
   return trimmed;
 }
-
-function appearsInTitleAsTicker(title: string, ticker: string): boolean {
-  if (!title) return false;
-  // Allow cashtag in any case, but bare ticker must be uppercase in source
-  const cashtag = new RegExp(`\\$${ticker}\\b`, 'i');
-  const bareUpper = new RegExp(`\\b${ticker}\\b`);
-  return cashtag.test(title) || bareUpper.test(title);
-}
-
-function appearsInTextAsTicker(title: string, body: string | null | undefined, ticker: string): boolean {
-  const text = `${title}\n${body ?? ''}`;
-  if (!text) return false;
-  const cashtag = new RegExp(`\\$${ticker}\\b`, 'i');
-  const bareUpper = new RegExp(`\\b${ticker}\\b`);
-  return cashtag.test(text) || bareUpper.test(text);
-}
-
-// Some tokens are common English words and generate legacy false positives.
-// For these, require explicit presence in the text; otherwise trust detected_tickers.
-const AMBIGUOUS_TICKERS = new Set<string>([
-  'CAN', 'ARE', 'ALL', 'FOR', 'RUN', 'EDIT', 'IT', 'ON', 'OR', 'ANY', 'ONE', 'AI', 'EV', 'DD'
-]);
 
 function nextTradingDayStart(day: Date): Date {
   let candidate = addDays(day, 1);
@@ -212,7 +191,7 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
 
     const { data, error } = await supabase
       .from('reddit_posts')
-      .select('post_id, title, body, author, url, detected_tickers, reason, emailed_at, created_utc, subreddit')
+      .select('post_id, title, body, author, url, detected_tickers, llm_tickers, reason, emailed_at, created_utc, subreddit')
       .not('emailed_at', 'is', null)
       .gte('emailed_at', lookbackDayStart.toISOString())
       .lt('emailed_at', lookbackDayEnd.toISOString())
@@ -228,15 +207,13 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
     const candidates: PositionCandidate[] = [];
 
     for (const row of rows) {
-      const tickers = (row.detected_tickers ?? [])
+      const rawTickers = Array.isArray(row.llm_tickers)
+        ? row.llm_tickers
+        : row.detected_tickers ?? [];
+
+      const tickers = rawTickers
         .map(sanitizeTicker)
-        .filter((t): t is string => Boolean(t))
-        .filter(t => {
-          if (AMBIGUOUS_TICKERS.has(t)) {
-            return appearsInTextAsTicker(row.title, row.body, t);
-          }
-          return true;
-        });
+        .filter((t): t is string => Boolean(t));
 
       if (!tickers.length) {
         continue;
