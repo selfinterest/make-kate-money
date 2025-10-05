@@ -84,6 +84,7 @@ Alerting:
    text, subreddit text not null, author text, url text not null, --
    https://www.reddit.com/... created_utc timestamptz not null, score int
    default 0, detected_tickers text[] default '{}', -- from prefilter
+   llm_tickers text[] default '{}', -- refined tickers from LLM
 
 -- LLM outputs is_future_upside_claim boolean, stance text check (stance in
 ('bullish','bearish','unclear')), reason text, quality_score int check
@@ -95,7 +96,8 @@ create index if not exists idx_posts_created on reddit_posts (created_utc desc);
 create index if not exists idx_posts_email on reddit_posts (emailed_at); create
 index if not exists idx_posts_quality on reddit_posts (is_future_upside_claim,
 stance, quality_score); create index if not exists idx_posts_tickers on
-reddit_posts using gin (detected_tickers);
+reddit_posts using gin (detected_tickers); create index if not exists
+idx_posts_llm_tickers on reddit_posts using gin (llm_tickers);
 
 create table if not exists app_meta( key text primary key, value jsonb not null,
 updated_at timestamptz default now() );
@@ -388,6 +390,7 @@ r])); const rows = candidates.map(c => { const r = byId.get(c.post.id); return {
 post_id: c.post.id, title: c.post.title, body: c.post.selftext ?? '', subreddit:
 c.post.subreddit, author: c.post.author, url: c.post.url, created_utc:
 c.post.createdUtc, score: c.post.score, detected_tickers: c.tickers,
+llm_tickers: r?.tickers ?? [],
 is_future_upside_claim: r?.is_future_upside_claim ?? null, stance: r?.stance ??
 null, reason: r?.reason ?? null, quality_score: r?.quality_score ?? null }; });
 
@@ -408,7 +411,7 @@ Date().toISOString() }) .in('post_id', ids); } 10) Email Digest ts Copy code //
 export async function sendDigest(rows: any[], cfg: any) { const r = new
 Resend(process.env.RESEND_API_KEY!); const date = new
 Date().toISOString().slice(0,10); const items = rows.map(row =>
-`**${(row.detected_tickers ?? []).join(', ')}** — ${row.title}
+`**${(row.llm_tickers ?? row.detected_tickers ?? []).join(', ')}** — ${row.title}
 Reason: ${row.reason}
 [Open](${row.url})\n`).join('\n');
 

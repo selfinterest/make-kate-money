@@ -102,9 +102,9 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
     textParts.push('');
     
     byQuality[score].forEach(candidate => {
-      const tickers = candidate.detected_tickers.join(', ');
+      const tickers = candidate.tickers.join(', ');
       const timeAgo = getTimeAgo(candidate.created_utc);
-      
+
       textParts.push(`**${tickers}** — ${candidate.title}`);
       textParts.push(`Reason: ${candidate.reason}`);
       textParts.push(`Posted: ${timeAgo}`);
@@ -127,9 +127,9 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
     htmlParts.push(`<h2>${sectionTitle}</h2>`);
     
     byQuality[score].forEach(candidate => {
-      const tickers = candidate.detected_tickers.join(', ');
+      const tickers = candidate.tickers.join(', ');
       const timeAgo = getTimeAgo(candidate.created_utc);
-      
+
       htmlParts.push(`
         <div style="margin-bottom: 20px; padding: 15px; border-left: 3px solid #0070f3; background-color: #f8f9fa;">
           <h3 style="margin: 0 0 8px 0;"><strong>${tickers}</strong> — ${escapeHtml(candidate.title)}</h3>

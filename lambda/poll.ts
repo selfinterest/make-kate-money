@@ -50,7 +50,9 @@ export async function handler(
         title: 'Test email from Reddit Stock Watcher',
         url: 'https://example.com/test',
         reason: 'This is a test of the email pipeline.',
+        tickers: ['TEST'],
         detected_tickers: ['TEST'],
+        llm_tickers: ['TEST'],
         quality_score: 5,
         created_utc: nowIso,
       };
