@@ -31,7 +31,7 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
         // Pull recent emailed alerts with tickers
         const { data: emailedRows, error: emailedErr } = await supabase
             .from('reddit_posts')
-            .select('post_id, created_utc, detected_tickers, quality_score')
+            .select('post_id, created_utc, detected_tickers, llm_tickers, quality_score')
             .not('emailed_at', 'is', null)
             .gte('created_utc', sinceIso)
             .order('created_utc', { ascending: true });
@@ -41,7 +41,12 @@ export async function handler(event: any, context: Context): Promise<BacktestRes
             .map((r: any) => ({
                 post_id: r.post_id as string,
                 created_utc: r.created_utc as string,
-                tickers: Array.isArray(r.detected_tickers) ? (r.detected_tickers as string[]).map(t => String(t).toUpperCase()) : [],
+                tickers: (() => {
+                    const llm = Array.isArray(r.llm_tickers) ? (r.llm_tickers as string[]) : [];
+                    const detected = Array.isArray(r.detected_tickers) ? (r.detected_tickers as string[]) : [];
+                    const chosen = llm.length > 0 ? llm : detected;
+                    return chosen.map(t => String(t).toUpperCase());
+                })(),
                 quality_score: typeof r.quality_score === 'number' ? r.quality_score as number : null,
             }))
             .filter(a => a.tickers.length > 0);
@@ -284,5 +289,4 @@ async function getLatestPriceTs(ticker: string, supabase: ReturnType<typeof getS
     if (error || !data || data.length === 0) return null;
     return new Date((data[0] as any).ts).getTime();
 }
-
 

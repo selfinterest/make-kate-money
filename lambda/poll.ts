@@ -51,6 +51,7 @@ export async function handler(
         url: 'https://example.com/test',
         reason: 'This is a test of the email pipeline.',
         detected_tickers: ['TEST'],
+        llm_tickers: ['TEST'],
         quality_score: 5,
         created_utc: nowIso,
       };

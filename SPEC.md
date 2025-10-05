@@ -84,6 +84,7 @@ Alerting:
    text, subreddit text not null, author text, url text not null, --
    https://www.reddit.com/... created_utc timestamptz not null, score int
    default 0, detected_tickers text[] default '{}', -- from prefilter
+   llm_tickers text[] default '{}', -- refined tickers from LLM
 
 -- LLM outputs is_future_upside_claim boolean, stance text check (stance in
 ('bullish','bearish','unclear')), reason text, quality_score int check
@@ -95,7 +96,8 @@ create index if not exists idx_posts_created on reddit_posts (created_utc desc);
 create index if not exists idx_posts_email on reddit_posts (emailed_at); create
 index if not exists idx_posts_quality on reddit_posts (is_future_upside_claim,
 stance, quality_score); create index if not exists idx_posts_tickers on
-reddit_posts using gin (detected_tickers);
+reddit_posts using gin (detected_tickers); create index if not exists
+idx_posts_llm_tickers on reddit_posts using gin (llm_tickers);
 
 create table if not exists app_meta( key text primary key, value jsonb not null,
 updated_at timestamptz default now() );
