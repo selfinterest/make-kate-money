@@ -102,7 +102,7 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
     textParts.push('');
     
     byQuality[score].forEach(candidate => {
-      const tickers = (candidate.llm_tickers.length > 0 ? candidate.llm_tickers : candidate.detected_tickers).join(', ');
+      const tickers = candidate.tickers.join(', ');
       const timeAgo = getTimeAgo(candidate.created_utc);
 
       textParts.push(`**${tickers}** — ${candidate.title}`);
@@ -127,7 +127,7 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
     htmlParts.push(`<h2>${sectionTitle}</h2>`);
     
     byQuality[score].forEach(candidate => {
-      const tickers = (candidate.llm_tickers.length > 0 ? candidate.llm_tickers : candidate.detected_tickers).join(', ');
+      const tickers = candidate.tickers.join(', ');
       const timeAgo = getTimeAgo(candidate.created_utc);
 
       htmlParts.push(`
