@@ -120,7 +120,13 @@ async function annotateCandidatesWithPriceMove(
           continue;
         }
 
-        const entryBar = findFirstBarOnOrAfter(series, new Date(createdMs));
+        const createdDate = new Date(createdMs);
+        // Use the most recent bar at or before the post time so we capture
+        // a price even if the next bar hasn't printed yet (e.g. post created
+        // between intraday intervals). If none exists, fall back to the next
+        // available bar so we still provide a reasonable entry price.
+        const entryBar = findLastBarOnOrBefore(series, createdDate)
+          ?? findFirstBarOnOrAfter(series, createdDate);
         const latestBar = findLastBarOnOrBefore(series, now);
 
         const entryPrice = entryBar?.close ?? entryBar?.open ?? null;
