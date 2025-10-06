@@ -13,6 +13,85 @@ function getResendClient(config: Config): Resend {
   return resendClient;
 }
 
+function formatUsd(value?: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'n/a';
+  }
+  return `$${value.toFixed(2)}`;
+}
+
+function formatPct(value?: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'n/a';
+  }
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${(value * 100).toFixed(2)}%`;
+}
+
+function formatPriceInsightsText(candidate: EmailCandidate): string[] {
+  const lines: string[] = [];
+  const insights = candidate.priceInsights ?? [];
+  if (insights.length === 0) {
+    if (candidate.priceAlert?.dataUnavailableCount) {
+      lines.push('Price: data unavailable');
+    }
+    return lines;
+  }
+
+  const thresholdPct = candidate.priceAlert?.thresholdPct ?? 0;
+  const thresholdLabel = thresholdPct > 0 ? `(threshold ±${(thresholdPct * 100).toFixed(2)}%)` : '';
+  const headerSuffix = candidate.priceAlert?.anyExceeded ? ' ⚠️' : '';
+  lines.push(`Price${headerSuffix}: ${thresholdLabel}`.trim());
+
+  insights.forEach(insight => {
+    if (insight.dataUnavailable) {
+      lines.push(`  ${insight.ticker}: data unavailable`);
+      return;
+    }
+    const latest = formatUsd(insight.latestPrice);
+    const entry = formatUsd(insight.entryPrice);
+    const move = formatPct(insight.movePct);
+    const flag = insight.exceedsThreshold ? ' ⚠️' : '';
+    lines.push(`  ${insight.ticker}: ${latest} (Δ ${move} from ${entry})${flag}`);
+  });
+
+  return lines;
+}
+
+function formatPriceInsightsHtml(candidate: EmailCandidate): string {
+  const insights = candidate.priceInsights ?? [];
+  if (insights.length === 0) {
+    if (candidate.priceAlert?.dataUnavailableCount) {
+      return `<p style="margin:4px 0;font-size:0.9em;">Price: data unavailable</p>`;
+    }
+    return '';
+  }
+
+  const thresholdPct = candidate.priceAlert?.thresholdPct ?? 0;
+  const thresholdLabel = thresholdPct > 0 ? ` (threshold ±${(thresholdPct * 100).toFixed(2)}%)` : '';
+  const headerSuffix = candidate.priceAlert?.anyExceeded ? ' ⚠️' : '';
+
+  const items = insights.map(insight => {
+    if (insight.dataUnavailable) {
+      return `<li style="margin-left:16px;">${escapeHtml(insight.ticker)}: data unavailable</li>`;
+    }
+    const latest = formatUsd(insight.latestPrice);
+    const entry = formatUsd(insight.entryPrice);
+    const move = formatPct(insight.movePct);
+    const flag = insight.exceedsThreshold ? ' ⚠️' : '';
+    return `<li style="margin-left:16px;">${escapeHtml(insight.ticker)}: ${escapeHtml(latest)} (Δ ${escapeHtml(move)} from ${escapeHtml(entry)})${flag}</li>`;
+  }).join('');
+
+  return `
+    <div style="margin:6px 0;">
+      <p style="margin:4px 0;font-size:0.9em;"><strong>Price${headerSuffix}:</strong>${escapeHtml(thresholdLabel)}</p>
+      <ul style="margin:0 0 0 12px;padding:0;font-size:0.9em;list-style:disc;">
+        ${items}
+      </ul>
+    </div>
+  `;
+}
+
 export async function sendDigest(
   candidates: EmailCandidate[], 
   config: Config
@@ -249,6 +328,7 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
 
       textParts.push(`**${tickers}** — ${candidate.title}`);
       textParts.push(`Reason: ${candidate.reason}`);
+      formatPriceInsightsText(candidate).forEach(line => textParts.push(line));
       textParts.push(`Posted: ${timeAgo}`);
       textParts.push(`Link: ${candidate.url}`);
       textParts.push('');
@@ -276,6 +356,7 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
         <div style="margin-bottom: 20px; padding: 15px; border-left: 3px solid #0070f3; background-color: #f8f9fa;">
           <h3 style="margin: 0 0 8px 0;"><strong>${tickers}</strong> — ${escapeHtml(candidate.title)}</h3>
           <p style="margin: 5px 0; color: #666;"><strong>Reason:</strong> ${escapeHtml(candidate.reason)}</p>
+          ${formatPriceInsightsHtml(candidate)}
           <p style="margin: 5px 0; font-size: 0.9em; color: #888;">Posted: ${timeAgo}</p>
           <p style="margin: 10px 0 0 0;"><a href="${candidate.url}" style="color: #0070f3; text-decoration: none;">View Post →</a></p>
         </div>

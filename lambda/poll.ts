@@ -1,5 +1,6 @@
 import type { EventBridgeEvent, Context } from 'aws-lambda';
 import { parseEnv } from '../lib/config';
+import type { Config } from '../lib/config';
 import { fetchNew } from '../lib/reddit';
 import { prefilterBatch } from '../lib/prefilter';
 import { classifyBatch } from '../lib/llm';
@@ -7,6 +8,7 @@ import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '
 import type { EmailCandidate } from '../lib/db';
 import { sendDigest } from '../lib/email';
 import { logger } from '../lib/logger';
+import { TiingoClient, findFirstBarOnOrAfter, findLastBarOnOrBefore } from '../lib/tiingo';
 
 interface PollResponse {
   ok: boolean;
@@ -26,6 +28,151 @@ function computeVotesPerMinute(createdUtc: string, score: number, referenceMs: n
 
   const ageMinutes = Math.max((referenceMs - createdMs) / 60000, 1 / 60);
   return score / ageMinutes;
+}
+
+async function annotateCandidatesWithPriceMove(
+  candidates: EmailCandidate[],
+  config: Config,
+  requestLogger: ReturnType<typeof logger.withContext>
+): Promise<{ annotated: EmailCandidate[]; exceededCount: number; dataUnavailableCount: number }> {
+  if (candidates.length === 0) {
+    return { annotated: candidates, exceededCount: 0, dataUnavailableCount: 0 };
+  }
+
+  const maxMove = config.app.maxPriceMovePctForAlert;
+  const thresholdForComparison = maxMove > 0 ? maxMove : Number.POSITIVE_INFINITY;
+
+  const tiingo = new TiingoClient(config.marketData.tiingoApiKey);
+  const now = new Date();
+  const nowMs = now.getTime();
+  const paddingMs = 60 * 60 * 1000; // 1 hour to ensure we capture the first tradable bar
+  const maxLookbackMs = 3 * 24 * 60 * 60 * 1000; // limit to last 3 days of intraday data
+
+  const tickerWindows = new Map<string, { startMs: number }>();
+
+  for (const candidate of candidates) {
+    const createdMs = new Date(candidate.created_utc).getTime();
+    if (Number.isNaN(createdMs)) {
+      continue;
+    }
+
+    const startMs = Math.max(createdMs - paddingMs, nowMs - maxLookbackMs);
+    const sourceTickers = (candidate.tickers && candidate.tickers.length > 0
+      ? candidate.tickers
+      : candidate.detected_tickers ?? []);
+    const uniqueTickers = Array.from(new Set(sourceTickers.map(t => t.toUpperCase())));
+
+    for (const ticker of uniqueTickers) {
+      const current = tickerWindows.get(ticker);
+      if (!current || startMs < current.startMs) {
+        tickerWindows.set(ticker, { startMs });
+      }
+    }
+  }
+
+  const tickerSeries = new Map<string, Awaited<ReturnType<TiingoClient['fetchIntraday']>> | null>();
+
+  for (const [ticker, window] of tickerWindows.entries()) {
+    try {
+      const bars = await tiingo.fetchIntraday({
+        ticker,
+        start: new Date(window.startMs),
+        end: now,
+        frequency: '5min',
+      });
+      tickerSeries.set(ticker, bars);
+    } catch (error) {
+      requestLogger.warn('Failed to fetch Tiingo data for ticker', {
+        ticker,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      tickerSeries.set(ticker, null);
+    }
+  }
+
+  const annotated: EmailCandidate[] = [];
+  let exceededCount = 0;
+  let dataUnavailableCount = 0;
+
+  for (const candidate of candidates) {
+    const createdMs = new Date(candidate.created_utc).getTime();
+    const tickers = Array.from(new Set((candidate.tickers && candidate.tickers.length > 0
+      ? candidate.tickers
+      : candidate.detected_tickers ?? []).map(t => t.toUpperCase())));
+
+    const insights: EmailCandidate['priceInsights'] = [];
+    let anyExceeded = false;
+    let maxObservedMove: number | null = null;
+    let unavailableForCandidate = 0;
+
+    if (!Number.isNaN(createdMs) && tickers.length > 0) {
+      for (const ticker of tickers) {
+        const series = tickerSeries.get(ticker);
+        if (!series || series.length === 0) {
+          insights.push({ ticker, dataUnavailable: true });
+          unavailableForCandidate += 1;
+          continue;
+        }
+
+        const entryBar = findFirstBarOnOrAfter(series, new Date(createdMs));
+        const latestBar = findLastBarOnOrBefore(series, now);
+
+        const entryPrice = entryBar?.close ?? entryBar?.open ?? null;
+        const latestPrice = latestBar?.close ?? latestBar?.open ?? null;
+
+        if (!entryPrice || !latestPrice || entryPrice <= 0 || latestPrice <= 0) {
+          insights.push({ ticker, entryPrice, latestPrice, dataUnavailable: true });
+          unavailableForCandidate += 1;
+          continue;
+        }
+
+        const movePct = (latestPrice - entryPrice) / entryPrice;
+        const absMove = Math.abs(movePct);
+        if (absMove >= thresholdForComparison && thresholdForComparison !== Number.POSITIVE_INFINITY) {
+          anyExceeded = true;
+        }
+        if (maxObservedMove === null || absMove > maxObservedMove) {
+          maxObservedMove = absMove;
+        }
+
+        insights.push({
+          ticker,
+          entryPrice,
+          latestPrice,
+          movePct,
+          exceedsThreshold: thresholdForComparison !== Number.POSITIVE_INFINITY && absMove >= thresholdForComparison,
+        });
+      }
+    } else {
+      if (tickers.length === 0) {
+        insights.push({ ticker: 'N/A', dataUnavailable: true });
+        unavailableForCandidate += 1;
+      } else {
+        unavailableForCandidate += tickers.length;
+        for (const ticker of tickers) {
+          insights.push({ ticker, dataUnavailable: true });
+        }
+      }
+    }
+
+    if (anyExceeded) {
+      exceededCount += 1;
+    }
+    dataUnavailableCount += unavailableForCandidate;
+
+    annotated.push({
+      ...candidate,
+      priceInsights: insights,
+      priceAlert: {
+        thresholdPct: maxMove,
+        anyExceeded,
+        maxMovePct: maxObservedMove,
+        dataUnavailableCount: unavailableForCandidate,
+      },
+    });
+  }
+
+  return { annotated, exceededCount, dataUnavailableCount };
 }
 
 export async function handler(
@@ -211,17 +358,47 @@ export async function handler(
     requestLogger.info('Posts upserted to database');
 
     // Step 6: Select and send email digest
-    const emailCandidates = await selectForEmail(config, {
+    let emailCandidates = await selectForEmail(config, {
       minQuality: config.app.qualityThreshold
     });
 
     let emailedCount = 0;
+    let priceExceededCount = 0;
+    let priceDataUnavailable = 0;
+
+    if (emailCandidates.length > 0) {
+      try {
+        const { annotated, exceededCount, dataUnavailableCount } = await annotateCandidatesWithPriceMove(
+          emailCandidates,
+          config,
+          requestLogger
+        );
+        emailCandidates = annotated;
+        priceExceededCount = exceededCount;
+        priceDataUnavailable = dataUnavailableCount;
+        requestLogger.info('Price move annotations completed', {
+          annotatedCount: annotated.length,
+          exceededThresholdCount: exceededCount,
+          dataUnavailableObservations: dataUnavailableCount,
+          thresholdPct: config.app.maxPriceMovePctForAlert
+        });
+      } catch (error) {
+        requestLogger.error('Price move annotation failed', {
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
     if (emailCandidates.length > 0) {
       try {
         await sendDigest(emailCandidates, config);
         await markEmailed(config, emailCandidates.map(c => c.post_id));
         emailedCount = emailCandidates.length;
-        requestLogger.info('Email digest sent successfully', { emailedCount });
+        requestLogger.info('Email digest sent successfully', {
+          emailedCount,
+          priceExceededCount,
+          priceDataUnavailable
+        });
       } catch (error) {
         requestLogger.error('Failed to send email digest', {
           candidateCount: emailCandidates.length,
@@ -231,7 +408,9 @@ export async function handler(
       }
     } else {
       requestLogger.info('No posts met email quality threshold', {
-        threshold: config.app.qualityThreshold
+        threshold: config.app.qualityThreshold,
+        priceExceededCount,
+        priceDataUnavailable
       });
     }
 
