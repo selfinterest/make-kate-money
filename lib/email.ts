@@ -6,11 +6,13 @@ import type { PriceWatchAlertInfo } from './price-watch';
 import type { PerformanceEmailPayload } from './performance-types';
 import {
   escapeHtml,
+  formatCompactNumber,
   formatEtTimestamp,
   formatPct,
   formatUsd,
   getTimeAgo,
 } from './email-utils';
+import type { TiingoFundamentalStatement, TiingoNewsArticle } from './tiingo';
 
 let resendClient: Resend | null = null;
 
@@ -118,6 +120,173 @@ function formatPriceInsightsHtml(candidate: EmailCandidate): string {
       </ul>
     </div>
   `;
+}
+
+const MAX_TICKER_CONTEXT = 3;
+const MAX_NEWS_ITEMS = 3;
+const MAX_FUNDAMENTAL_METRICS = 3;
+
+const FUNDAMENTAL_METRICS: Array<{ key: string; label: string; formatter: (value: number) => string }> = [
+  { key: 'totalrevenue', label: 'Revenue', formatter: formatCompactNumber },
+  { key: 'netincome', label: 'Net Income', formatter: formatCompactNumber },
+  { key: 'epsdiluted', label: 'EPS (Diluted)', formatter: formatUsd },
+  { key: 'ebitda', label: 'EBITDA', formatter: formatCompactNumber },
+  { key: 'operatingcashflow', label: 'Op. Cash Flow', formatter: formatCompactNumber },
+];
+
+function formatNewsSentimentText(article: TiingoNewsArticle): string | null {
+  const parts: string[] = [];
+  const value = article.sentiment?.value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const pct = (value * 100).toFixed(1);
+    const sign = value > 0 ? '+' : '';
+    parts.push(`${sign}${pct}%`);
+  }
+  const label = article.sentiment?.label;
+  if (label && label.trim().length > 0) {
+    parts.push(label);
+  }
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+function formatNewsSentimentHtml(article: TiingoNewsArticle): string {
+  const text = formatNewsSentimentText(article);
+  if (!text) {
+    return '';
+  }
+  const value = article.sentiment?.value ?? 0;
+  const color = value > 0 ? '#0b6a0b' : value < 0 ? '#b4231d' : '#555';
+  return `<span style="margin-left:6px;color:${color};font-size:0.85em;">${escapeHtml(text)}</span>`;
+}
+
+function extractFundamentalMetrics(statement: TiingoFundamentalStatement): Array<{ label: string; value: string }> {
+  const metrics: Array<{ label: string; value: string }> = [];
+  for (const field of FUNDAMENTAL_METRICS) {
+    const raw = statement.data[field.key];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      continue;
+    }
+    const formatted = field.formatter(raw);
+    if (formatted === 'n/a') {
+      continue;
+    }
+    metrics.push({ label: field.label, value: formatted });
+    if (metrics.length >= MAX_FUNDAMENTAL_METRICS) {
+      break;
+    }
+  }
+  return metrics;
+}
+
+function formatTiingoContextText(candidate: EmailCandidate, referenceDate: Date): string[] {
+  const contexts = (candidate.tiingoContext ?? [])
+    .filter(ctx => (ctx.news && ctx.news.length > 0) || ctx.fundamentals)
+    .slice(0, MAX_TICKER_CONTEXT);
+
+  const lines: string[] = [];
+  contexts.forEach(ctx => {
+    if (ctx.news && ctx.news.length > 0) {
+      lines.push(`News (${ctx.ticker}):`);
+      ctx.news.slice(0, MAX_NEWS_ITEMS).forEach(article => {
+        const sentiment = formatNewsSentimentText(article);
+        const timeAgo = getTimeAgo(article.publishedAt, referenceDate);
+        const suffixParts: string[] = [];
+        if (timeAgo !== 'n/a') suffixParts.push(timeAgo);
+        if (sentiment) suffixParts.push(sentiment);
+        const suffix = suffixParts.length > 0 ? ` (${suffixParts.join(' · ')})` : '';
+        lines.push(`  - ${article.title}${suffix}`);
+      });
+    }
+
+    if (ctx.fundamentals) {
+      const metrics = extractFundamentalMetrics(ctx.fundamentals);
+      if (metrics.length > 0) {
+        let header = `Fundamentals (${ctx.ticker}`;
+        if (ctx.fundamentals.period) {
+          header += ` ${ctx.fundamentals.period.toUpperCase()}`;
+        }
+        if (ctx.fundamentals.fiscalDate) {
+          header += ` as of ${ctx.fundamentals.fiscalDate.slice(0, 10)}`;
+        }
+        header += '):';
+        lines.push(header);
+        metrics.forEach(metric => {
+          lines.push(`  - ${metric.label}: ${metric.value}`);
+        });
+      }
+    }
+  });
+
+  return lines;
+}
+
+function formatTiingoContextHtml(candidate: EmailCandidate, referenceDate: Date): string {
+  const contexts = (candidate.tiingoContext ?? [])
+    .filter(ctx => (ctx.news && ctx.news.length > 0) || ctx.fundamentals)
+    .slice(0, MAX_TICKER_CONTEXT);
+
+  if (contexts.length === 0) {
+    return '';
+  }
+
+  const sections = contexts.map(ctx => {
+    const parts: string[] = [];
+    const metaPieces: string[] = [];
+    if (ctx.fundamentals?.period) {
+      metaPieces.push(ctx.fundamentals.period.toUpperCase());
+    }
+    if (ctx.fundamentals?.fiscalDate) {
+      metaPieces.push(`as of ${ctx.fundamentals.fiscalDate.slice(0, 10)}`);
+    }
+    const metaSuffix = metaPieces.length > 0
+      ? ` <span style="color:#666;font-size:0.85em;">${escapeHtml(metaPieces.join(' · '))}</span>`
+      : '';
+    parts.push(`<p style="margin:4px 0;font-weight:600;">${escapeHtml(ctx.ticker)} context${metaSuffix}</p>`);
+
+    if (ctx.news && ctx.news.length > 0) {
+      const items = ctx.news.slice(0, MAX_NEWS_ITEMS).map(article => {
+        const link = article.url
+          ? `<a href="${escapeHtml(article.url)}" style="color:#0070f3;text-decoration:none;">${escapeHtml(article.title)}</a>`
+          : escapeHtml(article.title);
+        const timeAgo = getTimeAgo(article.publishedAt, referenceDate);
+        const metaParts: string[] = [];
+        if (timeAgo !== 'n/a') {
+          metaParts.push(timeAgo);
+        }
+        const metaText = metaParts.length > 0
+          ? `<span style="margin-left:6px;color:#666;font-size:0.85em;">${escapeHtml(metaParts.join(' · '))}</span>`
+          : '';
+        const sentimentHtml = formatNewsSentimentHtml(article);
+        return `<li style="margin-bottom:4px;">${link}${metaText}${sentimentHtml}</li>`;
+      }).join('');
+
+      parts.push(`
+        <div style="margin:4px 0;">
+          <p style="margin:0 0 2px 0;font-size:0.9em;color:#555;">News</p>
+          <ul style="margin:0 0 0 18px;padding:0;font-size:0.9em;list-style:disc;">${items}</ul>
+        </div>
+      `);
+    }
+
+    if (ctx.fundamentals) {
+      const metrics = extractFundamentalMetrics(ctx.fundamentals);
+      if (metrics.length > 0) {
+        const metricsHtml = metrics.map(metric => `
+          <li style="margin-bottom:2px;"><strong>${escapeHtml(metric.label)}:</strong> ${escapeHtml(metric.value)}</li>
+        `).join('');
+        parts.push(`
+          <div style="margin:4px 0;">
+            <p style="margin:0 0 2px 0;font-size:0.9em;color:#555;">Key fundamentals</p>
+            <ul style="margin:0 0 0 18px;padding:0;font-size:0.9em;list-style:circle;">${metricsHtml}</ul>
+          </div>
+        `);
+      }
+    }
+
+    return `<div style="margin:8px 0;">${parts.join('')}</div>`;
+  });
+
+  return `<div style="margin:6px 0;">${sections.join('')}</div>`;
 }
 
 export async function sendDigest(
@@ -267,6 +436,7 @@ function composeDigestContent(
       textParts.push(`**${tickers}** — ${candidate.title}`);
       textParts.push(`Reason: ${candidate.reason}`);
       formatPriceInsightsText(candidate).forEach(line => textParts.push(line));
+      formatTiingoContextText(candidate, referenceDate).forEach(line => textParts.push(line));
       textParts.push(`Posted: ${timeAgo}`);
       textParts.push(`Link: ${candidate.url}`);
       textParts.push('');
@@ -294,6 +464,7 @@ function composeDigestContent(
           <h3 style="margin: 0 0 8px 0;"><strong>${tickers}</strong> — ${escapeHtml(candidate.title)}</h3>
           <p style="margin: 5px 0; color: #666;"><strong>Reason:</strong> ${escapeHtml(candidate.reason)}</p>
           ${formatPriceInsightsHtml(candidate)}
+          ${formatTiingoContextHtml(candidate, referenceDate)}
           <p style="margin: 5px 0; font-size: 0.9em; color: #888;">Posted: ${timeAgo}</p>
           <p style="margin: 10px 0 0 0;"><a href="${escapeHtml(candidate.url)}" style="color: #0070f3; text-decoration: none;">View Post →</a></p>
         </div>
