@@ -2,6 +2,8 @@ import { Resend } from 'resend';
 import { logger } from './logger';
 import type { Config } from './config';
 import type { EmailCandidate } from './db';
+import type { PriceWatchAlertInfo } from './price-watch';
+import { EASTERN_TIMEZONE } from './time';
 import type { PerformanceEmailPayload } from './performance-types';
 
 let resendClient: Resend | null = null;
@@ -151,6 +153,96 @@ export async function sendDigest(
       error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Email send failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function sendPriceWatchAlerts(
+  alerts: PriceWatchAlertInfo[],
+  config: Config,
+): Promise<void> {
+  if (alerts.length === 0) {
+    logger.debug('No price watch alerts to email');
+    return;
+  }
+
+  const resend = getResendClient(config);
+  const subjectTickers = alerts.map(a => a.ticker).join(', ');
+  const subject = `⏱️ Price Watch — ${subjectTickers}`;
+
+  const textLines: string[] = [];
+  textLines.push(subject, '');
+  textLines.push('These tickers are still within 5% of their recommendation price (or below):', '');
+
+  alerts.forEach(alert => {
+    const entry = formatUsd(alert.entryPrice);
+    const current = formatUsd(alert.currentPrice);
+    const move = formatPct(alert.movePct);
+    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
+    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
+    textLines.push(`${alert.ticker} — ${alert.title}`);
+    textLines.push(`  Current: ${current} (Δ ${move} from ${entry})`);
+    textLines.push(`  Recommended: ${recommendedAt} | Alerted: ${triggeredAt}`);
+    if (alert.url) {
+      textLines.push(`  Link: ${alert.url}`);
+    }
+    textLines.push('');
+  });
+
+  textLines.push('We will stop monitoring once the stock gains more than 15% or after today’s market close.');
+
+  const htmlRows = alerts.map(alert => {
+    const entry = formatUsd(alert.entryPrice);
+    const current = formatUsd(alert.currentPrice);
+    const move = formatPct(alert.movePct);
+    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
+    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
+    const title = escapeHtml(alert.title);
+    const escapedUrl = alert.url ? escapeHtml(alert.url) : '';
+    // eslint-disable-next-line prefer-template
+    const link = alert.url ? '<a href="' + escapedUrl + '">' + title + '</a>' : title;
+    // eslint-disable-next-line prefer-template
+    return '<li style="margin-bottom:12px;">'
+      + '<div style="font-weight:600;">' + escapeHtml(alert.ticker) + ' — ' + link + '</div>'
+      + '<div style="font-size:0.95em;">Current: <strong>' + escapeHtml(current) + '</strong> (Δ ' + escapeHtml(move)
+      + ' from ' + escapeHtml(entry) + ')</div>'
+      + '<div style="font-size:0.85em;color:#666;">Recommended: ' + escapeHtml(recommendedAt)
+      + ' · Alerted: ' + escapeHtml(triggeredAt) + '</div>'
+      + '</li>';
+  }).join('');
+
+  const htmlParts: string[] = [];
+  htmlParts.push('<div style="font-family:system-ui, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;">');
+  htmlParts.push('<h1 style="margin-bottom:8px;">⏱️ Price Watch</h1>');
+  htmlParts.push('<p style="margin:4px 0 12px 0;">These tickers are still within 5% of their recommendation price (or below):</p>');
+  // eslint-disable-next-line prefer-template
+  htmlParts.push('<ul style="margin:0;padding-left:16px;">' + htmlRows + '</ul>');
+  htmlParts.push('<p style="font-size:0.85em;color:#666;margin-top:12px;">Monitoring stops after a 15% gain or once today’s market closes.</p>');
+  htmlParts.push('</div>');
+
+  try {
+    const result = await resend.emails.send({
+      from: config.email.from,
+      to: config.email.to,
+      subject,
+      text: textLines.join('\n'),
+      html: htmlParts.join('\n'),
+    });
+
+    if (result.error) {
+      throw new Error(`Resend API error: ${result.error.message}`);
+    }
+
+    logger.info('Price watch alerts sent', {
+      emailId: result.data?.id,
+      alertCount: alerts.length,
+      to: config.email.to,
+    });
+  } catch (error) {
+    logger.error('Failed to send price watch alerts', {
+      alertCount: alerts.length,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw new Error(`Price watch email failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
@@ -385,6 +477,25 @@ function getTimeAgo(isoString: string): string {
   } else {
     return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
   }
+}
+
+function formatEtTimestamp(isoString: string): string {
+  if (!isoString) {
+    return 'n/a';
+  }
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return 'n/a';
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: EASTERN_TIMEZONE,
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  }).format(date);
 }
 
 function escapeHtml(text: string): string {
