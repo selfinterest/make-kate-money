@@ -1,0 +1,11 @@
+node_modules/
+cdk.out/
+dist/
+build/
+*.js
+*.d.ts
+coverage/
+.nyc_output/
+*.min.js
+public/
+assets/

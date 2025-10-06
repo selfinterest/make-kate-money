@@ -10,7 +10,7 @@ export function getSupabaseClient(config: Config): SupabaseClient {
   if (!supabaseClient) {
     supabaseClient = createClient(
       config.supabase.url,
-      config.supabase.apiKey
+      config.supabase.apiKey,
     );
   }
   return supabaseClient;
@@ -88,7 +88,7 @@ export async function getCursor(config: Config, key: string): Promise<string> {
   } catch (error) {
     logger.error('Failed to get cursor', {
       key,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to get cursor: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -97,7 +97,7 @@ export async function getCursor(config: Config, key: string): Promise<string> {
 export async function setCursor(
   config: Config,
   key: string,
-  posts: { createdUtc: string }[]
+  posts: { createdUtc: string }[],
 ): Promise<void> {
   if (posts.length === 0) {
     logger.debug('No posts to update cursor with', { key });
@@ -120,7 +120,7 @@ export async function setCursor(
       .upsert({
         key,
         value: { created_utc: latest } as any,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       } as any);
 
     if (error) {
@@ -133,7 +133,7 @@ export async function setCursor(
     logger.error('Failed to set cursor', {
       key,
       postCount: posts.length,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to set cursor: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -142,7 +142,7 @@ export async function setCursor(
 export async function upsertPosts(
   config: Config,
   candidates: Prefiltered[],
-  results: LlmResult[]
+  results: LlmResult[],
 ): Promise<void> {
   if (candidates.length === 0) {
     logger.debug('No candidates to upsert');
@@ -179,7 +179,7 @@ export async function upsertPosts(
     logger.info('Upserting posts to database', {
       candidateCount: candidates.length,
       llmResultCount: results.length,
-      rowCount: rows.length
+      rowCount: rows.length,
     });
 
     const { error } = await supabase
@@ -196,7 +196,7 @@ export async function upsertPosts(
     logger.error('Failed to upsert posts', {
       candidateCount: candidates.length,
       resultCount: results.length,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to upsert posts: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -204,7 +204,7 @@ export async function upsertPosts(
 
 export async function selectForEmail(
   config: Config,
-  options: { minQuality: number }
+  options: { minQuality: number },
 ): Promise<EmailCandidate[]> {
   const supabase = getSupabaseClient(config);
 
@@ -345,7 +345,7 @@ export async function selectForEmail(
   } catch (error) {
     logger.error('Failed to select posts for email', {
       minQuality: options.minQuality,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to select posts for email: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -376,7 +376,7 @@ export async function markEmailed(config: Config, postIds: string[]): Promise<vo
   } catch (error) {
     logger.error('Failed to mark posts as emailed', {
       postCount: postIds.length,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to mark posts as emailed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

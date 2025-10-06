@@ -42,7 +42,7 @@ function buildUserPrompt(post: PostRow): string {
     body.length > 0 ? body : '(no body provided)',
     '',
     'Return JSON with the shape: { "post_id": string, "tickers": string[] }',
-    'Only include ticker symbols that actually appear in the title or body.'
+    'Only include ticker symbols that actually appear in the title or body.',
   ].join('\n');
 
   return text;
@@ -62,7 +62,7 @@ function sanitizeTickers(raw: unknown): string[] {
 
 async function extractTickers(
   client: any,
-  post: PostRow
+  post: PostRow,
 ): Promise<string[]> {
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -70,8 +70,8 @@ async function extractTickers(
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: buildUserPrompt(post) }
-    ]
+      { role: 'user', content: buildUserPrompt(post) },
+    ],
   });
 
   const content = response.choices?.[0]?.message?.content;
@@ -86,7 +86,7 @@ async function extractTickers(
     logger.warn('Failed to parse OpenAI response', {
       postId: post.post_id,
       preview: content.slice(0, 200),
-      error: error instanceof Error ? error.message : 'unknown'
+      error: error instanceof Error ? error.message : 'unknown',
     });
     return [];
   }
@@ -94,7 +94,7 @@ async function extractTickers(
   if (parsed?.post_id && parsed.post_id !== post.post_id) {
     logger.warn('OpenAI response post_id mismatch', {
       expected: post.post_id,
-      received: parsed.post_id
+      received: parsed.post_id,
     });
   }
 
@@ -108,7 +108,7 @@ export async function handler(event: BackfillEvent = {}, context: Context) {
     limit: event.limit,
     after: event.after,
     postIdsProvided: Array.isArray(event.post_ids) ? event.post_ids.length : 0,
-    concurrency: event.concurrency
+    concurrency: event.concurrency,
   });
 
   requestLogger.info('Starting LLM ticker backfill');
@@ -148,7 +148,7 @@ export async function handler(event: BackfillEvent = {}, context: Context) {
     detected_tickers: Array.isArray(row.detected_tickers) ? row.detected_tickers as string[] : [],
     llm_tickers: Array.isArray(row.llm_tickers) ? row.llm_tickers as string[] : [],
     quality_score: typeof row.quality_score === 'number' ? row.quality_score as number : null,
-    created_utc: row.created_utc as string
+    created_utc: row.created_utc as string,
   }));
 
   if (candidates.length === 0) {
@@ -217,7 +217,7 @@ export async function handler(event: BackfillEvent = {}, context: Context) {
   requestLogger.info('Backfill run complete', {
     processed,
     updated,
-    failures: failures.length
+    failures: failures.length,
   });
 
   return { ok: failures.length === 0, processed, updated, failures };

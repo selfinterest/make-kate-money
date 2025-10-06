@@ -75,10 +75,10 @@ export class UpdateTickersConstruct extends Construct {
     // Weekly schedule - runs every Monday at 6 AM UTC (1 AM EST)
     new events.Rule(this, 'WeeklySchedule', {
       description: 'Update ticker list from GitHub repository weekly',
-      schedule: events.Schedule.cron({ 
-        minute: '0', 
-        hour: '6', 
-        weekDay: 'MON' 
+      schedule: events.Schedule.cron({
+        minute: '0',
+        hour: '6',
+        weekDay: 'MON',
       }),
       targets: [new targets.LambdaFunction(this.func)],
     });
@@ -88,9 +88,9 @@ export class UpdateTickersConstruct extends Construct {
     /*
     new events.Rule(this, 'DailySchedule', {
       description: 'Update ticker list from Tiingo API daily (testing)',
-      schedule: events.Schedule.cron({ 
-        minute: '0', 
-        hour: '6' 
+      schedule: events.Schedule.cron({
+        minute: '0',
+        hour: '6'
       }),
       targets: [new targets.LambdaFunction(this.func)],
     });

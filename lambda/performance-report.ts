@@ -50,7 +50,7 @@ function sanitizeTicker(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim().toUpperCase();
   if (!trimmed || trimmed.length > 8) return null;
-  if (!/^[A-Z\.]+$/.test(trimmed)) return null;
+  if (!/^[A-Z.]+$/.test(trimmed)) return null;
   return trimmed;
 }
 
@@ -105,7 +105,7 @@ async function findNearestLookbackDayWithEmails(
   startEtDayStart: Date,
   runEtDayStart: Date,
   maxBackDays: number,
-  logCtx: ReturnType<typeof logger.withContext>
+  logCtx: ReturnType<typeof logger.withContext>,
 ): Promise<{ selected: Date; shiftedBy: number }> {
   for (let delta = 0; delta <= maxBackDays; delta += 1) {
     const candidates: Array<{ date: Date; shift: number }> = [];
@@ -173,7 +173,7 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
       lookbackDayStart,
       runDayStart,
       7,
-      log
+      log,
     );
 
     lookbackDayStart = selectedLookbackStart;
