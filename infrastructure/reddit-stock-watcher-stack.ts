@@ -49,7 +49,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
 
 
     // Nightly Backtest Lambda to auto-tune QUALITY_THRESHOLD
-    const backtest = new BacktestConstruct(this, 'Backtest', {
+    new BacktestConstruct(this, 'Backtest', {
       ssmParamArns,
       qualityThresholdArn: `arn:aws:ssm:${this.region}:${this.account}:parameter/reddit-stock-watcher/QUALITY_THRESHOLD`,
     });
@@ -67,7 +67,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
     });
 
     // Update Poll construct to use tickers bucket
-    const poll = new PollConstruct(this, 'Poll', { 
+    const poll = new PollConstruct(this, 'Poll', {
       ssmParamArns,
       tickersBucket: updateTickers.bucket,
     });
@@ -100,7 +100,7 @@ export class RedditStockWatcherStack extends cdk.Stack {
       , 'BACKTEST_SL_PCT'
       , 'BACKTEST_HOURS'
       , 'BACKTEST_MAX_TICKERS_PER_RUN'
-      , 'TIINGO_API_KEY'
+      , 'TIINGO_API_KEY',
     ];
 
     // Create SSM parameters (will need to be populated manually)
@@ -122,27 +122,27 @@ export class RedditStockWatcherStack extends cdk.Stack {
     // Outputs
     new cdk.CfnOutput(this, 'FunctionName', {
       value: poll.func.functionName,
-      description: 'Name of the Lambda function'
+      description: 'Name of the Lambda function',
     });
 
     new cdk.CfnOutput(this, 'FunctionArn', {
       value: poll.func.functionArn,
-      description: 'ARN of the Lambda function'
+      description: 'ARN of the Lambda function',
     });
 
     new cdk.CfnOutput(this, 'BackfillFunctionName', {
       value: backfill.func.functionName,
-      description: 'Manual backfill Lambda function for LLM tickers'
+      description: 'Manual backfill Lambda function for LLM tickers',
     });
 
     new cdk.CfnOutput(this, 'BackfillFunctionArn', {
       value: backfill.func.functionArn,
-      description: 'ARN of the LLM ticker backfill Lambda'
+      description: 'ARN of the LLM ticker backfill Lambda',
     });
 
     new cdk.CfnOutput(this, 'ParameterPrefix', {
       value: '/reddit-stock-watcher/',
-      description: 'Parameter Store prefix for configuration values'
+      description: 'Parameter Store prefix for configuration values',
     });
 
     new cdk.CfnOutput(this, 'PerformanceReportBucket', {

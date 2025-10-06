@@ -113,6 +113,10 @@ nothing; RLS: For simplicity, use the service role key from the serverless
 function and keep RLS disabled for these two tables. If you need RLS later, add
 narrow policies and switch to function-invoked RPCs.
 
+Additional tables for ROI scoring:
+- `post_performance` — stores realized trade results per post/ticker, including entry/exit, profit, and run metadata.
+- `ticker_performance` — aggregates cumulative return and win rate per ticker for ranking boosts.
+
 4. Code Layout bash Copy code /api/poll.ts # serverless entrypoint (Node
    runtime, NOT Edge) /lib/config.ts # env parsing, constants /lib/reddit.ts #
    snoowrap client + fetchNew() /lib/prefilter.ts # ticker + upside lexicon +

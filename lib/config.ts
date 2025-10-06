@@ -80,7 +80,7 @@ async function loadParameters(): Promise<Record<string, string>> {
     '/reddit-stock-watcher/LLM_MAX_BODY_CHARS',
     '/reddit-stock-watcher/TIINGO_API_KEY',
     '/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM',
-    '/reddit-stock-watcher/MAX_PRICE_MOVE_PCT_FOR_ALERT'
+    '/reddit-stock-watcher/MAX_PRICE_MOVE_PCT_FOR_ALERT',
   ];
 
   try {
@@ -124,7 +124,7 @@ async function loadParameters(): Promise<Record<string, string>> {
     return parameterCache;
   } catch (error) {
     logger.error('Failed to load parameters from Parameter Store', {
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Failed to load configuration from Parameter Store: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

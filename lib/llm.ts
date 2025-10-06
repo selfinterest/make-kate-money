@@ -63,7 +63,7 @@ Rules:
 
 export async function classifyBatch(
   batch: LlmItem[],
-  config: Config
+  config: Config,
 ): Promise<LlmResult[]> {
   if (batch.length === 0) {
     logger.debug('Empty batch provided to LLM');
@@ -72,7 +72,7 @@ export async function classifyBatch(
 
   logger.info('Starting LLM classification', {
     batchSize: batch.length,
-    provider: config.llm.provider
+    provider: config.llm.provider,
   });
 
   try {
@@ -89,7 +89,7 @@ export async function classifyBatch(
     logger.info('LLM classification completed', {
       batchSize: batch.length,
       validResults: results.length,
-      provider: config.llm.provider
+      provider: config.llm.provider,
     });
 
     return results;
@@ -98,7 +98,7 @@ export async function classifyBatch(
     logger.error('LLM classification failed', {
       batchSize: batch.length,
       provider: config.llm.provider,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
 
     // Return empty results rather than failing the entire pipeline
@@ -110,7 +110,7 @@ async function callOpenAI(batch: LlmItem[], config: Config): Promise<string> {
   const { OpenAI } = await import('openai');
 
   const client = new OpenAI({
-    apiKey: config.llm.openaiApiKey!
+    apiKey: config.llm.openaiApiKey!,
   });
 
   logger.debug('Calling OpenAI API', { batchSize: batch.length });
@@ -118,7 +118,7 @@ async function callOpenAI(batch: LlmItem[], config: Config): Promise<string> {
   // For batch processing, we'll send all posts in one request
   // and ask for a JSON array response
   const userContent = batch.map(item =>
-    `POST ID: ${item.post_id}\n${createUserPrompt(item)}`
+    `POST ID: ${item.post_id}\n${createUserPrompt(item)}`,
   ).join('\n\n---\n\n');
 
   const finalPrompt = `${userContent}\n\nReturn a JSON array with one object per post, each containing the post_id and analysis.`;
@@ -129,8 +129,8 @@ async function callOpenAI(batch: LlmItem[], config: Config): Promise<string> {
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: finalPrompt }
-    ]
+      { role: 'user', content: finalPrompt },
+    ],
   });
 
   const content = response.choices[0].message.content;
@@ -140,15 +140,15 @@ async function callOpenAI(batch: LlmItem[], config: Config): Promise<string> {
 
   logger.debug('OpenAI response received', {
     responseLength: content.length,
-    usage: response.usage
+    usage: response.usage,
   });
 
   return content;
 }
 
-async function callAnthropic(batch: LlmItem[], config: Config): Promise<string> {
-  throw new Error('Anthropic provider is not supported in this implementation');
-}
+// async function callAnthropic(_batch: LlmItem[], _config: Config): Promise<string> {
+//   throw new Error('Anthropic provider is not supported in this implementation');
+// }
 
 function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmResult[] {
   logger.debug('Parsing LLM response', { responseLength: rawResponse.length });
@@ -160,7 +160,7 @@ function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmRes
   } catch (parseError) {
     logger.error('Failed to parse LLM JSON response', {
       error: parseError instanceof Error ? parseError.message : 'Unknown error',
-      responsePreview: rawResponse.slice(0, 200)
+      responsePreview: rawResponse.slice(0, 200),
     });
     return [];
   }
@@ -189,7 +189,7 @@ function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmRes
     if (!item.post_id || !batchPostIds.has(item.post_id)) {
       logger.warn('LLM result missing or invalid post_id', {
         providedId: item.post_id,
-        hasValidId: batchPostIds.has(item.post_id)
+        hasValidId: batchPostIds.has(item.post_id),
       });
       continue;
     }
@@ -200,7 +200,7 @@ function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmRes
     } else {
       logger.warn('LLM result failed schema validation', {
         postId: item.post_id,
-        errors: validate.errors
+        errors: validate.errors,
       });
     }
   }
@@ -208,7 +208,7 @@ function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmRes
   logger.info('Response validation completed', {
     rawItems: items.length,
     validResults: validResults.length,
-    batchSize: batch.length
+    batchSize: batch.length,
   });
 
   return validResults;
@@ -217,7 +217,7 @@ function parseAndValidateResponse(rawResponse: string, batch: LlmItem[]): LlmRes
 // Single post classification (useful for testing or retries)
 export async function classifySingle(
   item: LlmItem,
-  config: Config
+  config: Config,
 ): Promise<LlmResult | null> {
   const results = await classifyBatch([item], config);
   return results.length > 0 ? results[0] : null;

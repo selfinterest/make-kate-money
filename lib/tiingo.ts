@@ -54,7 +54,7 @@ export class TiingoClient {
       opts.ticker.toUpperCase(),
       opts.frequency,
       formatDate(opts.start),
-      formatDate(opts.end)
+      formatDate(opts.end),
     ].join('::');
   }
 

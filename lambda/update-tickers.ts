@@ -34,7 +34,7 @@ async function fetchTickersFromGitHub(): Promise<string[]> {
   const tickers = text
     .split('\n')
     .map((line: string) => line.trim().toUpperCase())
-    .filter((ticker: string) => ticker && ticker.length >= 1 && ticker.length <= 5 && /^[A-Z0-9\.\-]+$/.test(ticker));
+    .filter((ticker: string) => ticker && ticker.length >= 1 && ticker.length <= 5 && /^[A-Z0-9.-]+$/.test(ticker));
 
   requestLogger.info('Successfully fetched tickers from GitHub', { count: tickers.length });
   return tickers;
@@ -56,7 +56,7 @@ async function filterTickers(tickers: string[]): Promise<string[]> {
       }
 
       // Skip tickers with invalid characters
-      if (!/^[A-Z0-9\.\-]+$/.test(ticker)) {
+      if (!/^[A-Z0-9.-]+$/.test(ticker)) {
         return false;
       }
 
@@ -74,9 +74,9 @@ async function filterTickers(tickers: string[]): Promise<string[]> {
   // Remove duplicates
   const uniqueFiltered = Array.from(new Set(filtered));
 
-  requestLogger.info('Filtered tickers', { 
-    originalCount: tickers.length, 
-    filteredCount: uniqueFiltered.length 
+  requestLogger.info('Filtered tickers', {
+    originalCount: tickers.length,
+    filteredCount: uniqueFiltered.length,
   });
 
   return uniqueFiltered;
@@ -104,7 +104,7 @@ async function getCurrentTickers(bucket: string): Promise<string[]> {
     return tickers;
   } catch (error) {
     requestLogger.warn('Could not fetch current tickers from S3', {
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     return [];
   }
@@ -112,7 +112,7 @@ async function getCurrentTickers(bucket: string): Promise<string[]> {
 
 async function saveTickers(bucket: string, tickers: string[], isBackup: boolean = false): Promise<void> {
   const s3 = new S3Client({});
-  
+
   let key: string;
   if (isBackup) {
     const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
@@ -157,7 +157,7 @@ export async function handler(event: UpdateTickersEvent = {}, context: Context) 
     force: event.force ?? false,
   });
 
-    handlerLogger.info('Starting ticker update process (using GitHub repository)');
+  handlerLogger.info('Starting ticker update process (using GitHub repository)');
 
   try {
     const bucket = process.env.TICKERS_BUCKET;
@@ -175,7 +175,7 @@ export async function handler(event: UpdateTickersEvent = {}, context: Context) 
 
     // Compare with current tickers
     const comparison = compareTickerLists(currentTickers, newTickers);
-    
+
     handlerLogger.info('Ticker comparison complete', {
       currentCount: currentTickers.length,
       newCount: newTickers.length,
@@ -186,22 +186,22 @@ export async function handler(event: UpdateTickersEvent = {}, context: Context) 
 
     // Log changes
     if (comparison.added.length > 0) {
-      handlerLogger.info('Added tickers', { 
-        count: comparison.added.length, 
-        tickers: comparison.added.slice(0, 10) // Log first 10 for brevity
+      handlerLogger.info('Added tickers', {
+        count: comparison.added.length,
+        tickers: comparison.added.slice(0, 10), // Log first 10 for brevity
       });
     }
 
     if (comparison.removed.length > 0) {
-      handlerLogger.info('Removed tickers', { 
-        count: comparison.removed.length, 
-        tickers: comparison.removed.slice(0, 10) // Log first 10 for brevity
+      handlerLogger.info('Removed tickers', {
+        count: comparison.removed.length,
+        tickers: comparison.removed.slice(0, 10), // Log first 10 for brevity
       });
     }
 
     // Check if update is needed
     const hasChanges = comparison.added.length > 0 || comparison.removed.length > 0;
-    
+
     if (!hasChanges && !event.force) {
       handlerLogger.info('No changes detected, skipping update');
       return {
@@ -248,7 +248,7 @@ export async function handler(event: UpdateTickersEvent = {}, context: Context) 
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     handlerLogger.error('Failed to update tickers', { error: message });
-    
+
     return {
       success: false,
       message: `Failed to update tickers: ${message}`,

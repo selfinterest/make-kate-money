@@ -33,7 +33,7 @@ function computeVotesPerMinute(createdUtc: string, score: number, referenceMs: n
 async function annotateCandidatesWithPriceMove(
   candidates: EmailCandidate[],
   config: Config,
-  requestLogger: ReturnType<typeof logger.withContext>
+  requestLogger: ReturnType<typeof logger.withContext>,
 ): Promise<{ annotated: EmailCandidate[]; exceededCount: number; dataUnavailableCount: number }> {
   if (candidates.length === 0) {
     return { annotated: candidates, exceededCount: 0, dataUnavailableCount: 0 };
@@ -84,7 +84,7 @@ async function annotateCandidatesWithPriceMove(
     } catch (error) {
       requestLogger.warn('Failed to fetch Tiingo data for ticker', {
         ticker,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
       tickerSeries.set(ticker, null);
     }
@@ -177,13 +177,13 @@ async function annotateCandidatesWithPriceMove(
 
 export async function handler(
   event: EventBridgeEvent<string, any>,
-  context: Context
+  context: Context,
 ): Promise<PollResponse> {
   const startTime = Date.now();
   const requestLogger = logger.withContext({
     requestId: context.awsRequestId,
     functionName: context.functionName,
-    source: event.source
+    source: event.source,
   });
 
   requestLogger.info('Poll request started');
@@ -194,7 +194,7 @@ export async function handler(
     requestLogger.info('Configuration loaded', {
       subreddits: config.app.subreddits,
       llmProvider: config.llm.provider,
-      maxPosts: config.app.maxPostsPerRun
+      maxPosts: config.app.maxPostsPerRun,
     });
 
     // Optional: test email path
@@ -234,7 +234,7 @@ export async function handler(
       config.app.subreddits,
       sinceIso,
       config.app.cronWindowMinutes,
-      config.app.maxPostsPerRun
+      config.app.maxPostsPerRun,
     );
 
     requestLogger.info('Reddit fetch completed', { postCount: posts.length });
@@ -249,7 +249,7 @@ export async function handler(
         candidates: 0,
         llmClassified: 0,
         emailed: 0,
-        executionTime
+        executionTime,
       };
     }
 
@@ -296,7 +296,7 @@ export async function handler(
       minVotesPerMinute: config.app.minVotesPerMinuteForLlm,
       scoreQualified,
       velocityQualified,
-      averageVotesPerMinute: Number(averageVotesPerMinute.toFixed(2))
+      averageVotesPerMinute: Number(averageVotesPerMinute.toFixed(2)),
     });
 
     if (candidates.length === 0) {
@@ -309,7 +309,7 @@ export async function handler(
         candidates: 0,
         llmClassified: 0,
         emailed: 0,
-        executionTime
+        executionTime,
       };
     }
 
@@ -318,13 +318,13 @@ export async function handler(
       post_id: c.post.id,
       title: c.post.title,
       body: (c.post.selftext ?? '').slice(0, config.app.llmMaxBodyChars),
-      tickers: c.tickers
+      tickers: c.tickers,
     }));
 
     // Step 4: Classify in batches to avoid token limits
     requestLogger.info('Starting LLM classification', {
       itemCount: llmItems.length,
-      batchSize: config.app.llmBatchSize
+      batchSize: config.app.llmBatchSize,
     });
 
     const allResults = [];
@@ -332,7 +332,7 @@ export async function handler(
       const batch = llmItems.slice(i, i + config.app.llmBatchSize);
       const batchLogger = requestLogger.withContext({
         batchIndex: Math.floor(i / config.app.llmBatchSize) + 1,
-        batchSize: batch.length
+        batchSize: batch.length,
       });
 
       try {
@@ -342,7 +342,7 @@ export async function handler(
         batchLogger.info('LLM batch completed', { resultCount: batchResults.length });
       } catch (error) {
         batchLogger.error('LLM batch failed', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
         // Continue with other batches even if one fails
       }
@@ -350,7 +350,7 @@ export async function handler(
 
     requestLogger.info('LLM classification completed', {
       totalResults: allResults.length,
-      candidateCount: candidates.length
+      candidateCount: candidates.length,
     });
 
     // Step 5: Store results in database
@@ -359,7 +359,7 @@ export async function handler(
 
     // Step 6: Select and send email digest
     let emailCandidates = await selectForEmail(config, {
-      minQuality: config.app.qualityThreshold
+      minQuality: config.app.qualityThreshold,
     });
 
     let emailedCount = 0;
@@ -371,7 +371,7 @@ export async function handler(
         const { annotated, exceededCount, dataUnavailableCount } = await annotateCandidatesWithPriceMove(
           emailCandidates,
           config,
-          requestLogger
+          requestLogger,
         );
         emailCandidates = annotated;
         priceExceededCount = exceededCount;
@@ -380,11 +380,11 @@ export async function handler(
           annotatedCount: annotated.length,
           exceededThresholdCount: exceededCount,
           dataUnavailableObservations: dataUnavailableCount,
-          thresholdPct: config.app.maxPriceMovePctForAlert
+          thresholdPct: config.app.maxPriceMovePctForAlert,
         });
       } catch (error) {
         requestLogger.error('Price move annotation failed', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     }
@@ -397,12 +397,12 @@ export async function handler(
         requestLogger.info('Email digest sent successfully', {
           emailedCount,
           priceExceededCount,
-          priceDataUnavailable
+          priceDataUnavailable,
         });
       } catch (error) {
         requestLogger.error('Failed to send email digest', {
           candidateCount: emailCandidates.length,
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
         // Don't fail the entire request if email fails
       }
@@ -410,7 +410,7 @@ export async function handler(
       requestLogger.info('No posts met email quality threshold', {
         threshold: config.app.qualityThreshold,
         priceExceededCount,
-        priceDataUnavailable
+        priceDataUnavailable,
       });
     }
 
@@ -424,7 +424,7 @@ export async function handler(
       candidates: candidates.length,
       llmClassified: allResults.length,
       emailed: emailedCount,
-      executionTime
+      executionTime,
     };
 
     requestLogger.info('Poll request completed successfully', response);
@@ -436,7 +436,7 @@ export async function handler(
 
     requestLogger.error('Poll request failed', {
       error: errorMessage,
-      executionTime
+      executionTime,
     });
 
     return {
@@ -446,7 +446,7 @@ export async function handler(
       llmClassified: 0,
       emailed: 0,
       error: errorMessage,
-      executionTime
+      executionTime,
     };
   }
 }

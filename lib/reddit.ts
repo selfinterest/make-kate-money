@@ -74,7 +74,7 @@ export async function fetchNew(
   subreddits: string[],
   sinceIso: string,
   windowMinutes: number,
-  maxPosts: number
+  maxPosts: number,
 ): Promise<Post[]> {
   const reddit = getRedditClient(config);
 
@@ -86,7 +86,7 @@ export async function fetchNew(
       subreddits,
       sinceIso,
       windowMinutes,
-      maxPosts
+      maxPosts,
     });
 
     const allPosts: Post[] = [];
@@ -126,13 +126,13 @@ export async function fetchNew(
 
         logger.debug('Fetched posts from subreddit', {
           subreddit,
-          postCount: subredditPosts
+          postCount: subredditPosts,
         });
 
       } catch (error) {
         logger.error('Failed to fetch from subreddit', {
           subreddit,
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
         // Continue with other subreddits
       }
@@ -154,7 +154,7 @@ export async function fetchNew(
       afterDeduplication: sortedPosts.length,
       maxPosts,
       oldestPost: sortedPosts.length > 0 ? sortedPosts[0].createdUtc : null,
-      newestPost: sortedPosts.length > 0 ? sortedPosts[sortedPosts.length - 1].createdUtc : null
+      newestPost: sortedPosts.length > 0 ? sortedPosts[sortedPosts.length - 1].createdUtc : null,
     });
 
     return sortedPosts;
@@ -162,7 +162,7 @@ export async function fetchNew(
   } catch (error) {
     logger.error('Failed to fetch posts from Reddit', {
       subreddits,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw new Error(`Reddit fetch failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

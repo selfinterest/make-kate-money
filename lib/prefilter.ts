@@ -7,7 +7,6 @@ let TICKERS: Set<string> | null = null;
 let STOPLIST: Set<string> | null = null;
 
 // Regex patterns for ticker detection
-const CASHTAG = /\$[A-Z]{1,5}\b/g;
 const BARE_TICKER = /\b[A-Z]{2,5}\b/g;
 
 // Upside language clues
@@ -41,7 +40,7 @@ const UPSIDE_CLUES = [
   'hodl',
   'buy the dip',
   'calls',
-  'yolo'
+  'yolo',
 ];
 
 export interface Prefiltered {
@@ -73,7 +72,7 @@ async function loadTickersFromS3(bucket: string): Promise<string[]> {
     return tickers;
   } catch (error) {
     logger.warn('Failed to load tickers from S3', {
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
     throw error;
   }
@@ -97,7 +96,7 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
         logger.info('Loaded tickers from S3', { count: tickers.length });
       } catch (error) {
         logger.warn('Failed to load tickers from S3, falling back to static file', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
         // Fall through to static file loading
       }
@@ -111,7 +110,7 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
         logger.info('Loaded tickers from static file', { count: tickers.length });
       } catch (error) {
         logger.error('Failed to load tickers from static file', {
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: error instanceof Error ? error.message : 'Unknown error',
         });
         // Will fall through to fallback logic below
       }
@@ -125,7 +124,7 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
       logger.debug('Loaded stoplist from static file', { count: stoplist.length });
     } catch (error) {
       logger.warn('Failed to load stoplist from static file, using default', {
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
       });
       stoplist = ['ON', 'ALL', 'FOR', 'IT', 'OR', 'ANY', 'ONE', 'META', 'SHOP', 'RUN', 'EDIT', 'EV', 'AI'];
     }
@@ -142,14 +141,14 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
     logger.info('Assets loaded successfully', {
       tickerCount: TICKERS.size,
       stoplistCount: STOPLIST.size,
-      source: tickersBucket ? 'S3' : 'static'
+      source: tickersBucket ? 'S3' : 'static',
     });
 
     return { tickers: TICKERS, stoplist: STOPLIST };
 
   } catch (error) {
     logger.error('Failed to load assets', {
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
     });
 
     // Fallback to empty sets if assets can't be loaded
@@ -158,7 +157,7 @@ async function loadAssets(): Promise<{ tickers: Set<string>; stoplist: Set<strin
 
     logger.warn('Using fallback asset data', {
       tickerCount: TICKERS.size,
-      stoplistCount: STOPLIST.size
+      stoplistCount: STOPLIST.size,
     });
 
     return { tickers: TICKERS, stoplist: STOPLIST };
@@ -174,7 +173,7 @@ export async function prefilter(post: Post): Promise<Prefiltered> {
   logger.debug('Prefiltering post', {
     postId: post.id,
     titleLength: post.title.length,
-    bodyLength: post.selftext?.length ?? 0
+    bodyLength: post.selftext?.length ?? 0,
   });
 
   // 1) Find cashtags ($SYMBOL) — case-insensitive symbol, normalized to upper
@@ -206,7 +205,7 @@ export async function prefilter(post: Post): Promise<Prefiltered> {
   const result: Prefiltered = {
     post,
     tickers: Array.from(detectedTickers),
-    upsideHits
+    upsideHits,
   };
 
   logger.debug('Prefilter results', {
@@ -214,7 +213,7 @@ export async function prefilter(post: Post): Promise<Prefiltered> {
     tickerCount: result.tickers.length,
     tickers: result.tickers,
     upsideHitCount: result.upsideHits.length,
-    upsideHits: result.upsideHits
+    upsideHits: result.upsideHits,
   });
 
   return result;
@@ -225,7 +224,7 @@ export async function prefilterBatch(posts: Post[]): Promise<Prefiltered[]> {
   logger.info('Starting batch prefilter', { postCount: posts.length });
 
   const results = await Promise.all(
-    posts.map(post => prefilter(post))
+    posts.map(post => prefilter(post)),
   );
 
   const withHits = results.filter(r => r.tickers.length > 0 && r.upsideHits.length > 0);
@@ -233,7 +232,7 @@ export async function prefilterBatch(posts: Post[]): Promise<Prefiltered[]> {
   logger.info('Batch prefilter completed', {
     totalPosts: posts.length,
     withTickersAndUpside: withHits.length,
-    filteredOut: posts.length - withHits.length
+    filteredOut: posts.length - withHits.length,
   });
 
   return results;
