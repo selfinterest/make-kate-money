@@ -55,6 +55,7 @@ App knobs:
 - `/reddit-stock-watcher/LLM_MAX_BODY_CHARS` (default 2000)
 - `/reddit-stock-watcher/MIN_SCORE_FOR_LLM` (default 1)
 - `/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM` (default 0.5)
+- `/reddit-stock-watcher/MAX_PRICE_MOVE_PCT_FOR_ALERT` (default 0.07)
 - `/reddit-stock-watcher/QUALITY_THRESHOLD` (tuned nightly)
 - `/reddit-stock-watcher/MAX_POSTS_PER_RUN` (default 120)
 

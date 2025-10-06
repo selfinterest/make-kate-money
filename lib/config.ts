@@ -45,6 +45,7 @@ export interface Config {
     qualityThreshold: number;
     maxPostsPerRun: number;
     minVotesPerMinuteForLlm: number;
+    maxPriceMovePctForAlert: number;
   };
 }
 
@@ -78,7 +79,8 @@ async function loadParameters(): Promise<Record<string, string>> {
     '/reddit-stock-watcher/CRON_WINDOW_MINUTES',
     '/reddit-stock-watcher/LLM_MAX_BODY_CHARS',
     '/reddit-stock-watcher/TIINGO_API_KEY',
-    '/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM'
+    '/reddit-stock-watcher/MIN_VOTES_PER_MINUTE_FOR_LLM',
+    '/reddit-stock-watcher/MAX_PRICE_MOVE_PCT_FOR_ALERT'
   ];
 
   try {
@@ -211,6 +213,7 @@ export async function parseEnv(): Promise<Config> {
         qualityThreshold: getIntParam(params, 'QUALITY_THRESHOLD', 3),
         maxPostsPerRun: getIntParam(params, 'MAX_POSTS_PER_RUN', 120),
         minVotesPerMinuteForLlm: getFloatParam(params, 'MIN_VOTES_PER_MINUTE_FOR_LLM', 0.5),
+        maxPriceMovePctForAlert: getFloatParam(params, 'MAX_PRICE_MOVE_PCT_FOR_ALERT', 0.07),
       },
     };
 
@@ -231,12 +234,17 @@ export async function parseEnv(): Promise<Config> {
       throw new Error('MIN_VOTES_PER_MINUTE_FOR_LLM must be non-negative');
     }
 
+    if (config.app.maxPriceMovePctForAlert < 0) {
+      throw new Error('MAX_PRICE_MOVE_PCT_FOR_ALERT must be non-negative');
+    }
+
     logger.info('Configuration parsed successfully', {
       subredditCount: config.app.subreddits.length,
       llmProvider: config.llm.provider,
       batchSize: config.app.llmBatchSize,
       qualityThreshold: config.app.qualityThreshold,
       minVotesPerMinuteForLlm: config.app.minVotesPerMinuteForLlm,
+      maxPriceMovePctForAlert: config.app.maxPriceMovePctForAlert,
     });
 
     return config;

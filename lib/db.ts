@@ -45,6 +45,20 @@ export interface EmailCandidate {
   detected_tickers: string[];
   quality_score: number;
   created_utc: string;
+  priceInsights?: Array<{
+    ticker: string;
+    entryPrice?: number | null;
+    latestPrice?: number | null;
+    movePct?: number | null;
+    exceedsThreshold?: boolean;
+    dataUnavailable?: boolean;
+  }>;
+  priceAlert?: {
+    thresholdPct: number;
+    anyExceeded: boolean;
+    maxMovePct?: number | null;
+    dataUnavailableCount?: number;
+  };
 }
 
 export async function getCursor(config: Config, key: string): Promise<string> {
