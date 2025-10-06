@@ -3,10 +3,22 @@ import { logger } from './logger';
 import type { Config } from './config';
 import type { EmailCandidate } from './db';
 import type { PriceWatchAlertInfo } from './price-watch';
-import { EASTERN_TIMEZONE } from './time';
 import type { PerformanceEmailPayload } from './performance-types';
+import {
+  escapeHtml,
+  formatEtTimestamp,
+  formatPct,
+  formatUsd,
+  getTimeAgo,
+} from './email-utils';
 
 let resendClient: Resend | null = null;
+
+interface EmailContent {
+  subject: string;
+  text: string;
+  html: string;
+}
 
 function getResendClient(config: Config): Resend {
   if (!resendClient) {
@@ -15,19 +27,33 @@ function getResendClient(config: Config): Resend {
   return resendClient;
 }
 
-function formatUsd(value?: number | null): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return 'n/a';
-  }
-  return `$${value.toFixed(2)}`;
-}
+async function sendEmail(
+  content: EmailContent,
+  config: Config,
+  metadata: Record<string, unknown>,
+): Promise<string | null> {
+  const resend = getResendClient(config);
 
-function formatPct(value?: number | null): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return 'n/a';
+  logger.debug('Sending email via Resend', {
+    ...metadata,
+    from: config.email.from,
+    to: config.email.to,
+    subject: content.subject,
+  });
+
+  const result = await resend.emails.send({
+    from: config.email.from,
+    to: config.email.to,
+    subject: content.subject,
+    text: content.text,
+    html: content.html,
+  });
+
+  if (result.error) {
+    throw new Error(`Resend API error: ${result.error.message}`);
   }
-  const sign = value > 0 ? '+' : '';
-  return `${sign}${(value * 100).toFixed(2)}%`;
+
+  return result.data?.id ?? null;
 }
 
 function formatPriceInsightsText(candidate: EmailCandidate): string[] {
@@ -103,50 +129,22 @@ export async function sendDigest(
     return;
   }
 
-  const resend = getResendClient(config);
+  const sortedCandidates = sortCandidates(candidates);
 
   try {
-    logger.info('Preparing email digest', { candidateCount: candidates.length });
+    logger.info('Preparing email digest', { candidateCount: sortedCandidates.length });
 
-    const date = new Date().toISOString().slice(0, 10);
-    const subject = `🚀 Stock Watch — ${date} (${candidates.length} alerts)`;
-
-    // Sort by quality score (highest first), then by creation time
-    const sortedCandidates = [...candidates].sort((a, b) => {
-      if (b.quality_score !== a.quality_score) {
-        return b.quality_score - a.quality_score;
-      }
-      return new Date(a.created_utc).getTime() - new Date(b.created_utc).getTime();
-    });
-
-    // Generate email content
-    const { textContent, htmlContent } = generateEmailContent(sortedCandidates, date);
-
-    logger.debug('Sending email via Resend', {
-      from: config.email.from,
-      to: config.email.to,
-      subject,
+    const content = buildDigestEmail(sortedCandidates);
+    const emailId = await sendEmail(content, config, {
       candidateCount: sortedCandidates.length,
+      emailType: 'daily-digest',
     });
-
-    const result = await resend.emails.send({
-      from: config.email.from,
-      to: config.email.to,
-      subject,
-      text: textContent,
-      html: htmlContent,
-    });
-
-    if (result.error) {
-      throw new Error(`Resend API error: ${result.error.message}`);
-    }
 
     logger.info('Email digest sent successfully', {
-      emailId: result.data?.id,
+      emailId,
       candidateCount: sortedCandidates.length,
       to: config.email.to,
     });
-
   } catch (error) {
     logger.error('Failed to send email digest', {
       candidateCount: candidates.length,
@@ -165,75 +163,15 @@ export async function sendPriceWatchAlerts(
     return;
   }
 
-  const resend = getResendClient(config);
-  const subjectTickers = alerts.map(a => a.ticker).join(', ');
-  const subject = `⏱️ Price Watch — ${subjectTickers}`;
-
-  const textLines: string[] = [];
-  textLines.push(subject, '');
-  textLines.push('These tickers are still within 5% of their recommendation price (or below):', '');
-
-  alerts.forEach(alert => {
-    const entry = formatUsd(alert.entryPrice);
-    const current = formatUsd(alert.currentPrice);
-    const move = formatPct(alert.movePct);
-    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
-    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
-    textLines.push(`${alert.ticker} — ${alert.title}`);
-    textLines.push(`  Current: ${current} (Δ ${move} from ${entry})`);
-    textLines.push(`  Recommended: ${recommendedAt} | Alerted: ${triggeredAt}`);
-    if (alert.url) {
-      textLines.push(`  Link: ${alert.url}`);
-    }
-    textLines.push('');
-  });
-
-  textLines.push('We will stop monitoring once the stock gains more than 15% or after today’s market close.');
-
-  const htmlRows = alerts.map(alert => {
-    const entry = formatUsd(alert.entryPrice);
-    const current = formatUsd(alert.currentPrice);
-    const move = formatPct(alert.movePct);
-    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
-    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
-    const title = escapeHtml(alert.title);
-    const escapedUrl = alert.url ? escapeHtml(alert.url) : '';
-    // eslint-disable-next-line prefer-template
-    const link = alert.url ? '<a href="' + escapedUrl + '">' + title + '</a>' : title;
-    // eslint-disable-next-line prefer-template
-    return '<li style="margin-bottom:12px;">'
-      + '<div style="font-weight:600;">' + escapeHtml(alert.ticker) + ' — ' + link + '</div>'
-      + '<div style="font-size:0.95em;">Current: <strong>' + escapeHtml(current) + '</strong> (Δ ' + escapeHtml(move)
-      + ' from ' + escapeHtml(entry) + ')</div>'
-      + '<div style="font-size:0.85em;color:#666;">Recommended: ' + escapeHtml(recommendedAt)
-      + ' · Alerted: ' + escapeHtml(triggeredAt) + '</div>'
-      + '</li>';
-  }).join('');
-
-  const htmlParts: string[] = [];
-  htmlParts.push('<div style="font-family:system-ui, -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;">');
-  htmlParts.push('<h1 style="margin-bottom:8px;">⏱️ Price Watch</h1>');
-  htmlParts.push('<p style="margin:4px 0 12px 0;">These tickers are still within 5% of their recommendation price (or below):</p>');
-  // eslint-disable-next-line prefer-template
-  htmlParts.push('<ul style="margin:0;padding-left:16px;">' + htmlRows + '</ul>');
-  htmlParts.push('<p style="font-size:0.85em;color:#666;margin-top:12px;">Monitoring stops after a 15% gain or once today’s market closes.</p>');
-  htmlParts.push('</div>');
-
   try {
-    const result = await resend.emails.send({
-      from: config.email.from,
-      to: config.email.to,
-      subject,
-      text: textLines.join('\n'),
-      html: htmlParts.join('\n'),
+    const content = buildPriceWatchEmail(alerts);
+    const emailId = await sendEmail(content, config, {
+      alertCount: alerts.length,
+      emailType: 'price-watch',
     });
 
-    if (result.error) {
-      throw new Error(`Resend API error: ${result.error.message}`);
-    }
-
     logger.info('Price watch alerts sent', {
-      emailId: result.data?.id,
+      emailId,
       alertCount: alerts.length,
       to: config.email.to,
     });
@@ -250,132 +188,16 @@ export async function sendPerformanceReportEmail(
   payload: PerformanceEmailPayload,
   config: Config,
 ): Promise<void> {
-  const resend = getResendClient(config);
-
   try {
-    const summary = payload.report;
-    const subject = `📊 Performance — ${summary.lookbackDateEt} ➜ ${summary.runDateEt}`;
-
-    const topWinners = [...payload.completed]
-      .sort((a, b) => b.returnPct - a.returnPct)
-      .slice(0, 5);
-
-    const topLosers = [...payload.completed]
-      .sort((a, b) => a.returnPct - b.returnPct)
-      .slice(0, 5);
-
-    const textLines: string[] = [];
-    textLines.push(subject, '');
-    textLines.push(`Run date (ET): ${summary.runDateEt}`);
-    textLines.push(`Lookback date (ET): ${summary.lookbackDateEt}`);
-    textLines.push(`Positions: ${summary.completedPositions}/${summary.totalPositions} completed`);
-    const avgReturnStr = summary.averageReturnPct !== null ? `${summary.averageReturnPct.toFixed(2)}%` : 'n/a';
-    const winRateStr = summary.winRatePct !== null ? `${summary.winRatePct.toFixed(2)}%` : 'n/a';
-    textLines.push(`Net P&L: $${summary.netProfitUsd.toFixed(2)} (${avgReturnStr} avg return)`);
-    textLines.push(`Win rate: ${winRateStr}`);
-    textLines.push(`Download: ${payload.downloadUrl}`);
-    textLines.push('', 'Top Winners:');
-    if (!topWinners.length) {
-      textLines.push('  (none)');
-    } else {
-      for (const item of topWinners) {
-        textLines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
-        textLines.push(`    Link: ${item.url}`);
-      }
-    }
-    textLines.push('', 'Top Losers:');
-    if (!topLosers.length) {
-      textLines.push('  (none)');
-    } else {
-      for (const item of topLosers) {
-        textLines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
-        textLines.push(`    Link: ${item.url}`);
-      }
-    }
-    if (payload.errors.length) {
-      textLines.push('', 'Tickers with missing data:');
-      for (const err of payload.errors) {
-        textLines.push(`  ${err.ticker}: ${err.error} — ${err.title}`);
-        textLines.push(`    Link: ${err.url}`);
-      }
-    }
-    const text = textLines.join('\n');
-
-    const htmlSections: string[] = [];
-    htmlSections.push(`<h1>📊 Performance Report — ${escapeHtml(summary.lookbackDateEt)} ➜ ${escapeHtml(summary.runDateEt)}</h1>`);
-    htmlSections.push('<ul>');
-    htmlSections.push(`<li><strong>Run date (ET):</strong> ${escapeHtml(summary.runDateEt)}</li>`);
-    htmlSections.push(`<li><strong>Lookback (ET):</strong> ${escapeHtml(summary.lookbackDateEt)}</li>`);
-    htmlSections.push(`<li><strong>Positions:</strong> ${summary.completedPositions}/${summary.totalPositions} completed</li>`);
-    htmlSections.push(`<li><strong>Net P&amp;L:</strong> $${summary.netProfitUsd.toFixed(2)} (<strong>${escapeHtml(avgReturnStr)}</strong> avg return)</li>`);
-    htmlSections.push(`<li><strong>Win rate:</strong> ${escapeHtml(winRateStr)}</li>`);
-    htmlSections.push(`<li><strong>Download:</strong> <a href="${payload.downloadUrl}">JSON report</a></li>`);
-    htmlSections.push('</ul>');
-
-    const renderTable = (title: string, rows: typeof payload.completed) => {
-      if (!rows.length) {
-        return `<h2>${escapeHtml(title)}</h2><p>(none)</p>`;
-      }
-      const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
-      const header = `<tr>
-          <th ${cellStyle}>Ticker</th>
-          <th ${cellStyle}>Return %</th>
-          <th ${cellStyle}>P&L</th>
-          <th ${cellStyle}>Entry</th>
-          <th ${cellStyle}>Exit</th>
-          <th ${cellStyle}>Post</th>
-        </tr>`;
-      const body = rows.map(item => `
-        <tr>
-          <td ${cellStyle}>${escapeHtml(item.ticker)}</td>
-          <td ${cellStyle}>${item.returnPct.toFixed(2)}%</td>
-          <td ${cellStyle}>$${item.profitUsd.toFixed(2)}</td>
-          <td ${cellStyle}>${item.entryPrice ? `$${item.entryPrice.toFixed(2)}` : '—'}</td>
-          <td ${cellStyle}>${item.exitPrice ? `$${item.exitPrice.toFixed(2)}` : '—'}</td>
-          <td ${cellStyle}><a href="${item.url}">${escapeHtml(item.title)}</a></td>
-        </tr>
-      `).join('');
-      return `<h2>${escapeHtml(title)}</h2><table style="width:100%; border-collapse:collapse;">${header}${body}</table>`;
-    };
-
-    htmlSections.push(renderTable('Top Winners', topWinners));
-    htmlSections.push(renderTable('Top Losers', topLosers));
-
-    if (payload.errors.length) {
-      const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
-      const rows = payload.errors.map(err => `
-        <tr>
-          <td ${cellStyle}>${escapeHtml(err.ticker)}</td>
-          <td ${cellStyle}>${escapeHtml(err.error)}</td>
-          <td ${cellStyle}><a href="${err.url}">${escapeHtml(err.title)}</a></td>
-        </tr>
-      `).join('');
-      const header = `<tr>
-          <th ${cellStyle}>Ticker</th>
-          <th ${cellStyle}>Error</th>
-          <th ${cellStyle}>Post</th>
-        </tr>`;
-      htmlSections.push('<h2>Tickers With Missing Data</h2>');
-      htmlSections.push(`<table style="width:100%; border-collapse:collapse;">${header}${rows}</table>`);
-    }
-
-    htmlSections.push('<hr><p style="font-size: 0.9em; color: #666;"><em>This simulation allocates $1,000 per ticker at the entry price noted. This is not investment advice.</em></p>');
-    const html = htmlSections.join('\n');
-
-    const result = await resend.emails.send({
-      from: config.email.from,
-      to: config.email.to,
-      subject,
-      text,
-      html,
+    const content = buildPerformanceReportEmail(payload);
+    const emailId = await sendEmail(content, config, {
+      completed: payload.completed.length,
+      errorCount: payload.errors.length,
+      emailType: 'performance-report',
     });
 
-    if (result.error) {
-      throw new Error(`Resend API error: ${result.error.message}`);
-    }
-
     logger.info('Performance report email sent', {
-      emailId: result.data?.id,
+      emailId,
       completed: payload.completed.length,
       errors: payload.errors.length,
     });
@@ -383,15 +205,41 @@ export async function sendPerformanceReportEmail(
     logger.error('Failed to send performance report email', {
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    throw error;
+    throw error instanceof Error ? error : new Error('Unknown error');
   }
 }
 
-function generateEmailContent(candidates: EmailCandidate[], date: string): { textContent: string; htmlContent: string } {
-  const header = `🚀 Stock Watch — ${date}`;
+function sortCandidates(candidates: EmailCandidate[]): EmailCandidate[] {
+  return [...candidates].sort((a, b) => {
+    if (b.quality_score !== a.quality_score) {
+      return b.quality_score - a.quality_score;
+    }
+    return new Date(a.created_utc).getTime() - new Date(b.created_utc).getTime();
+  });
+}
+
+function buildDigestEmail(
+  candidates: EmailCandidate[],
+  referenceDate: Date = new Date(),
+): EmailContent {
+  const dateLabel = referenceDate.toISOString().slice(0, 10);
+  const subject = `🚀 Stock Watch — ${dateLabel} (${candidates.length} alerts)`;
+  const { text, html } = composeDigestContent(candidates, dateLabel, referenceDate);
+  return {
+    subject,
+    text,
+    html,
+  };
+}
+
+function composeDigestContent(
+  candidates: EmailCandidate[],
+  dateLabel: string,
+  referenceDate: Date,
+): { text: string; html: string } {
+  const header = `🚀 Stock Watch — ${dateLabel}`;
   const disclaimer = '*This is for informational purposes only and is not investment advice. Do your own research.*';
 
-  // Group by quality score for better organization
   const byQuality = candidates.reduce((acc, candidate) => {
     const score = candidate.quality_score;
     if (!acc[score]) acc[score] = [];
@@ -401,22 +249,20 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
 
   const qualityScores = Object.keys(byQuality)
     .map(Number)
-    .sort((a, b) => b - a); // Highest quality first
+    .sort((a, b) => b - a);
 
-  // Generate text content
-  const textParts = [header, ''];
+  const textParts: string[] = [header, ''];
 
   qualityScores.forEach(score => {
-    if (score >= 4) {
-      textParts.push(`🔥 HIGH QUALITY (${score}/5):`);
-    } else {
-      textParts.push(`📈 Quality ${score}/5:`);
-    }
-    textParts.push('');
+    const sectionTitle = score >= 4
+      ? `🔥 HIGH QUALITY (${score}/5):`
+      : `📈 Quality ${score}/5:`;
+
+    textParts.push(sectionTitle, '');
 
     byQuality[score].forEach(candidate => {
       const tickers = candidate.tickers.join(', ');
-      const timeAgo = getTimeAgo(candidate.created_utc);
+      const timeAgo = getTimeAgo(candidate.created_utc, referenceDate);
 
       textParts.push(`**${tickers}** — ${candidate.title}`);
       textParts.push(`Reason: ${candidate.reason}`);
@@ -428,21 +274,20 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
   });
 
   textParts.push('', disclaimer);
-  const textContent = textParts.join('\n');
+  const text = textParts.join('\n');
 
-  // Generate HTML content
-  const htmlParts = [`<h1>${header}</h1>`];
+  const htmlParts: string[] = [`<h1>${escapeHtml(header)}</h1>`];
 
   qualityScores.forEach(score => {
     const sectionTitle = score >= 4
       ? `🔥 HIGH QUALITY (${score}/5)`
       : `📈 Quality ${score}/5`;
 
-    htmlParts.push(`<h2>${sectionTitle}</h2>`);
+    htmlParts.push(`<h2>${escapeHtml(sectionTitle)}</h2>`);
 
     byQuality[score].forEach(candidate => {
-      const tickers = candidate.tickers.join(', ');
-      const timeAgo = getTimeAgo(candidate.created_utc);
+      const tickers = escapeHtml(candidate.tickers.join(', '));
+      const timeAgo = escapeHtml(getTimeAgo(candidate.created_utc, referenceDate));
 
       htmlParts.push(`
         <div style="margin-bottom: 20px; padding: 15px; border-left: 3px solid #0070f3; background-color: #f8f9fa;">
@@ -450,67 +295,224 @@ function generateEmailContent(candidates: EmailCandidate[], date: string): { tex
           <p style="margin: 5px 0; color: #666;"><strong>Reason:</strong> ${escapeHtml(candidate.reason)}</p>
           ${formatPriceInsightsHtml(candidate)}
           <p style="margin: 5px 0; font-size: 0.9em; color: #888;">Posted: ${timeAgo}</p>
-          <p style="margin: 10px 0 0 0;"><a href="${candidate.url}" style="color: #0070f3; text-decoration: none;">View Post →</a></p>
+          <p style="margin: 10px 0 0 0;"><a href="${escapeHtml(candidate.url)}" style="color: #0070f3; text-decoration: none;">View Post →</a></p>
         </div>
       `);
     });
   });
 
-  htmlParts.push(`<hr><p style="font-size: 0.9em; color: #666;"><em>${disclaimer}</em></p>`);
-  const htmlContent = htmlParts.join('\n');
+  htmlParts.push(`<hr><p style="font-size: 0.9em; color: #666;"><em>${escapeHtml(disclaimer)}</em></p>`);
+  const html = htmlParts.join('\n');
 
-  return { textContent, htmlContent };
+  return { text, html };
 }
 
-function getTimeAgo(isoString: string): string {
-  const now = new Date();
-  const postTime = new Date(isoString);
-  const diffMs = now.getTime() - postTime.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffMins = Math.floor(diffMs / (1000 * 60));
+function buildPriceWatchEmail(alerts: PriceWatchAlertInfo[]): EmailContent {
+  const subjectTickers = alerts.map(a => a.ticker).join(', ');
+  const subject = `⏱️ Price Watch — ${subjectTickers}`;
+  const text = buildPriceWatchText(alerts, subject);
+  const html = buildPriceWatchHtml(alerts);
+  return { subject, text, html };
+}
 
-  if (diffHours > 24) {
-    const diffDays = Math.floor(diffHours / 24);
-    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-  } else if (diffHours > 0) {
-    return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+function buildPriceWatchText(alerts: PriceWatchAlertInfo[], subject: string): string {
+  const lines: string[] = [];
+  lines.push(subject, '');
+  lines.push('These tickers are still within 5% of their recommendation price (or below):', '');
+
+  alerts.forEach(alert => {
+    const entry = formatUsd(alert.entryPrice);
+    const current = formatUsd(alert.currentPrice);
+    const move = formatPct(alert.movePct);
+    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
+    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
+    lines.push(`${alert.ticker} — ${alert.title}`);
+    lines.push(`  Current: ${current} (Δ ${move} from ${entry})`);
+    lines.push(`  Recommended: ${recommendedAt} | Alerted: ${triggeredAt}`);
+    if (alert.url) {
+      lines.push(`  Link: ${alert.url}`);
+    }
+    lines.push('');
+  });
+
+  lines.push('We will stop monitoring once the stock gains more than 15% or after today’s market close.');
+  return lines.join('\n');
+}
+
+function buildPriceWatchHtml(alerts: PriceWatchAlertInfo[]): string {
+  const rows = alerts.map(alert => {
+    const entry = formatUsd(alert.entryPrice);
+    const current = formatUsd(alert.currentPrice);
+    const move = formatPct(alert.movePct);
+    const recommendedAt = formatEtTimestamp(alert.emailedAtIso);
+    const triggeredAt = formatEtTimestamp(alert.triggeredAtIso);
+    const title = escapeHtml(alert.title);
+    const link = alert.url
+      ? `<a href="${escapeHtml(alert.url)}">${title}</a>`
+      : title;
+
+    return `
+      <li style="margin-bottom:12px;">
+        <div style="font-weight:600;">${escapeHtml(alert.ticker)} — ${link}</div>
+        <div style="font-size:0.95em;">Current: <strong>${escapeHtml(current)}</strong> (Δ ${escapeHtml(move)} from ${escapeHtml(entry)})</div>
+        <div style="font-size:0.85em;color:#666;">Recommended: ${escapeHtml(recommendedAt)} · Alerted: ${escapeHtml(triggeredAt)}</div>
+      </li>
+    `;
+  }).join('');
+
+  return [
+    '<div style="font-family:system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;">',
+    '<h1 style="margin-bottom:8px;">⏱️ Price Watch</h1>',
+    '<p style="margin:4px 0 12px 0;">These tickers are still within 5% of their recommendation price (or below):</p>',
+    `<ul style="margin:0;padding-left:16px;">${rows}</ul>`,
+    '<p style="font-size:0.85em;color:#666;margin-top:12px;">Monitoring stops after a 15% gain or once today’s market closes.</p>',
+    '</div>',
+  ].join('\n');
+}
+
+function buildPerformanceReportEmail(payload: PerformanceEmailPayload): EmailContent {
+  const summary = payload.report;
+  const subject = `📊 Performance — ${summary.lookbackDateEt} ➜ ${summary.runDateEt}`;
+  const text = buildPerformanceText(payload, subject);
+  const html = buildPerformanceHtml(payload);
+  return { subject, text, html };
+}
+
+function buildPerformanceText(payload: PerformanceEmailPayload, subject: string): string {
+  const { report: summary } = payload;
+  const topWinners = [...payload.completed]
+    .sort((a, b) => b.returnPct - a.returnPct)
+    .slice(0, 5);
+  const topLosers = [...payload.completed]
+    .sort((a, b) => a.returnPct - b.returnPct)
+    .slice(0, 5);
+
+  const lines: string[] = [];
+  lines.push(subject, '');
+  lines.push(`Run date (ET): ${summary.runDateEt}`);
+  lines.push(`Lookback date (ET): ${summary.lookbackDateEt}`);
+  lines.push(`Positions: ${summary.completedPositions}/${summary.totalPositions} completed`);
+  const avgReturnStr = summary.averageReturnPct !== null ? `${summary.averageReturnPct.toFixed(2)}%` : 'n/a';
+  const winRateStr = summary.winRatePct !== null ? `${summary.winRatePct.toFixed(2)}%` : 'n/a';
+  lines.push(`Net P&L: $${summary.netProfitUsd.toFixed(2)} (${avgReturnStr} avg return)`);
+  lines.push(`Win rate: ${winRateStr}`);
+  lines.push(`Download: ${payload.downloadUrl}`);
+
+  lines.push('', 'Top Winners:');
+  if (!topWinners.length) {
+    lines.push('  (none)');
   } else {
-    return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    for (const item of topWinners) {
+      lines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
+      lines.push(`    Link: ${item.url}`);
+    }
   }
+
+  lines.push('', 'Top Losers:');
+  if (!topLosers.length) {
+    lines.push('  (none)');
+  } else {
+    for (const item of topLosers) {
+      lines.push(`  ${item.ticker}: ${item.returnPct.toFixed(2)}% ($${item.profitUsd.toFixed(2)}) — ${item.title}`);
+      lines.push(`    Link: ${item.url}`);
+    }
+  }
+
+  if (payload.errors.length) {
+    lines.push('', 'Tickers with missing data:');
+    for (const err of payload.errors) {
+      lines.push(`  ${err.ticker}: ${err.error} — ${err.title}`);
+      lines.push(`    Link: ${err.url}`);
+    }
+  }
+
+  lines.push('', 'This simulation allocates $1,000 per ticker at the entry price noted. This is not investment advice.');
+
+  return lines.join('\n');
 }
 
-function formatEtTimestamp(isoString: string): string {
-  if (!isoString) {
-    return 'n/a';
-  }
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) {
-    return 'n/a';
-  }
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: EASTERN_TIMEZONE,
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }).format(date);
-}
+function buildPerformanceHtml(payload: PerformanceEmailPayload): string {
+  const { report: summary } = payload;
+  const avgReturnStr = summary.averageReturnPct !== null
+    ? `${summary.averageReturnPct.toFixed(2)}%`
+    : 'n/a';
+  const winRateStr = summary.winRatePct !== null
+    ? `${summary.winRatePct.toFixed(2)}%`
+    : 'n/a';
 
-function escapeHtml(text: string): string {
-  const div = { innerHTML: '' } as any;
-  div.textContent = text;
-  return div.innerHTML || text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  const renderCompletedTable = (title: string, rows: typeof payload.completed) => {
+    if (!rows.length) {
+      return `<h2>${escapeHtml(title)}</h2><p>(none)</p>`;
+    }
+    const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
+    const header = `<tr>
+        <th ${cellStyle}>Ticker</th>
+        <th ${cellStyle}>Return %</th>
+        <th ${cellStyle}>P&L</th>
+        <th ${cellStyle}>Entry</th>
+        <th ${cellStyle}>Exit</th>
+        <th ${cellStyle}>Post</th>
+      </tr>`;
+    const body = rows.map(item => `
+        <tr>
+          <td ${cellStyle}>${escapeHtml(item.ticker)}</td>
+          <td ${cellStyle}>${item.returnPct.toFixed(2)}%</td>
+          <td ${cellStyle}>$${item.profitUsd.toFixed(2)}</td>
+          <td ${cellStyle}>${item.entryPrice ? `$${item.entryPrice.toFixed(2)}` : '—'}</td>
+          <td ${cellStyle}>${item.exitPrice ? `$${item.exitPrice.toFixed(2)}` : '—'}</td>
+          <td ${cellStyle}><a href="${escapeHtml(item.url)}">${escapeHtml(item.title)}</a></td>
+        </tr>
+      `).join('');
+    return `<h2>${escapeHtml(title)}</h2><table style="width:100%; border-collapse:collapse;">${header}${body}</table>`;
+  };
+
+  const sections: string[] = [];
+  sections.push(`<h1>📊 Performance Report — ${escapeHtml(summary.lookbackDateEt)} ➜ ${escapeHtml(summary.runDateEt)}</h1>`);
+  sections.push('<ul>');
+  sections.push(`<li><strong>Run date (ET):</strong> ${escapeHtml(summary.runDateEt)}</li>`);
+  sections.push(`<li><strong>Lookback (ET):</strong> ${escapeHtml(summary.lookbackDateEt)}</li>`);
+  sections.push(`<li><strong>Positions:</strong> ${summary.completedPositions}/${summary.totalPositions} completed</li>`);
+  sections.push(`<li><strong>Net P&amp;L:</strong> $${summary.netProfitUsd.toFixed(2)} (<strong>${escapeHtml(avgReturnStr)}</strong> avg return)</li>`);
+  sections.push(`<li><strong>Win rate:</strong> ${escapeHtml(winRateStr)}</li>`);
+  sections.push(`<li><strong>Download:</strong> <a href="${escapeHtml(payload.downloadUrl)}">JSON report</a></li>`);
+  sections.push('</ul>');
+
+  const topWinners = [...payload.completed]
+    .sort((a, b) => b.returnPct - a.returnPct)
+    .slice(0, 5);
+  const topLosers = [...payload.completed]
+    .sort((a, b) => a.returnPct - b.returnPct)
+    .slice(0, 5);
+
+  sections.push(renderCompletedTable('Top Winners', topWinners));
+  sections.push(renderCompletedTable('Top Losers', topLosers));
+
+  if (payload.errors.length) {
+    const cellStyle = 'style="padding:6px 8px;border:1px solid #ddd;text-align:left;"';
+    const rows = payload.errors.map(err => `
+        <tr>
+          <td ${cellStyle}>${escapeHtml(err.ticker)}</td>
+          <td ${cellStyle}>${escapeHtml(err.error)}</td>
+          <td ${cellStyle}><a href="${escapeHtml(err.url)}">${escapeHtml(err.title)}</a></td>
+        </tr>
+      `).join('');
+    const header = `<tr>
+        <th ${cellStyle}>Ticker</th>
+        <th ${cellStyle}>Error</th>
+        <th ${cellStyle}>Post</th>
+      </tr>`;
+    sections.push('<h2>Tickers With Missing Data</h2>');
+    sections.push(`<table style="width:100%; border-collapse:collapse;">${header}${rows}</table>`);
+  }
+
+  sections.push('<hr><p style="font-size: 0.9em; color: #666;"><em>This simulation allocates $1,000 per ticker at the entry price noted. This is not investment advice.</em></p>');
+
+  return sections.join('\n');
 }
 
 // Test function to preview email content without sending
 export function previewDigest(candidates: EmailCandidate[]): { textContent: string; htmlContent: string } {
-  const date = new Date().toISOString().slice(0, 10);
-  return generateEmailContent(candidates, date);
+  const sorted = sortCandidates(candidates);
+  const content = buildDigestEmail(sorted);
+  return { textContent: content.text, htmlContent: content.html };
 }
