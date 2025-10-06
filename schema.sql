@@ -66,3 +66,32 @@ CREATE TABLE IF NOT EXISTS prices (
 CREATE INDEX IF NOT EXISTS idx_prices_ticker_ts ON prices (ticker, ts DESC);
 
 ALTER TABLE prices DISABLE ROW LEVEL SECURITY;
+
+-- Intraday price watch tasks
+CREATE TABLE IF NOT EXISTS price_watches (
+  id BIGSERIAL PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES reddit_posts(post_id) ON DELETE CASCADE,
+  ticker TEXT NOT NULL,
+  quality_score INT NOT NULL,
+  entry_price NUMERIC NOT NULL,
+  entry_price_ts TIMESTAMPTZ NOT NULL,
+  emailed_at TIMESTAMPTZ NOT NULL,
+  monitor_start_at TIMESTAMPTZ NOT NULL,
+  monitor_close_at TIMESTAMPTZ NOT NULL,
+  next_check_at TIMESTAMPTZ,
+  last_price NUMERIC,
+  last_price_ts TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'triggered', 'expired')),
+  stop_reason TEXT,
+  triggered_at TIMESTAMPTZ,
+  triggered_price NUMERIC,
+  triggered_move_pct NUMERIC,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_price_watches_post_ticker ON price_watches (post_id, ticker);
+CREATE INDEX IF NOT EXISTS idx_price_watches_status_next ON price_watches (status, next_check_at);
+CREATE INDEX IF NOT EXISTS idx_price_watches_next_check ON price_watches (next_check_at);
+
+ALTER TABLE price_watches DISABLE ROW LEVEL SECURITY;

@@ -6,9 +6,15 @@ import { prefilterBatch } from '../lib/prefilter';
 import { classifyBatch } from '../lib/llm';
 import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '../lib/db';
 import type { EmailCandidate } from '../lib/db';
-import { sendDigest } from '../lib/email';
+import { sendDigest, sendPriceWatchAlerts } from '../lib/email';
 import { logger } from '../lib/logger';
 import { TiingoClient, findFirstBarOnOrAfter, findLastBarOnOrBefore } from '../lib/tiingo';
+import {
+  schedulePriceWatches,
+  processPriceWatchQueue,
+  type PriceWatchProcessResult,
+  type PriceWatchSeed,
+} from '../lib/price-watch';
 
 interface PollResponse {
   ok: boolean;
@@ -119,9 +125,11 @@ async function annotateCandidatesWithPriceMove(
 
         const entryPrice = entryBar?.close ?? entryBar?.open ?? null;
         const latestPrice = latestBar?.close ?? latestBar?.open ?? null;
+        const entryTimestamp = entryBar?.timestamp ?? null;
+        const latestTimestamp = latestBar?.timestamp ?? null;
 
         if (!entryPrice || !latestPrice || entryPrice <= 0 || latestPrice <= 0) {
-          insights.push({ ticker, entryPrice, latestPrice, dataUnavailable: true });
+          insights.push({ ticker, entryPrice, entryTimestamp, latestPrice, latestTimestamp, dataUnavailable: true });
           unavailableForCandidate += 1;
           continue;
         }
@@ -138,7 +146,9 @@ async function annotateCandidatesWithPriceMove(
         insights.push({
           ticker,
           entryPrice,
+          entryTimestamp,
           latestPrice,
+          latestTimestamp,
           movePct,
           exceedsThreshold: thresholdForComparison !== Number.POSITIVE_INFINITY && absMove >= thresholdForComparison,
         });
@@ -175,6 +185,97 @@ async function annotateCandidatesWithPriceMove(
   return { annotated, exceededCount, dataUnavailableCount };
 }
 
+const EMPTY_PRICE_WATCH_RESULT: PriceWatchProcessResult = {
+  checked: 0,
+  triggered: [],
+  expired: 0,
+  rescheduled: 0,
+  dataUnavailable: 0,
+  exceededFifteenPct: 0,
+};
+
+async function handlePriceWatchProcessing(
+  config: Config,
+  requestLogger: ReturnType<typeof logger.withContext>,
+  phase: string,
+): Promise<PriceWatchProcessResult> {
+  try {
+    const result = await processPriceWatchQueue(config, requestLogger);
+
+    if (result.checked > 0 || result.triggered.length > 0 || result.expired > 0 || result.rescheduled > 0) {
+      requestLogger.info('Processed price watch queue', {
+        phase,
+        checked: result.checked,
+        triggered: result.triggered.length,
+        expired: result.expired,
+        rescheduled: result.rescheduled,
+        dataUnavailable: result.dataUnavailable,
+        exceededFifteenPct: result.exceededFifteenPct,
+      });
+    }
+
+    if (result.triggered.length > 0) {
+      try {
+        await sendPriceWatchAlerts(result.triggered, config);
+      } catch (error) {
+        requestLogger.error('Failed to send price watch alerts', {
+          phase,
+          alertCount: result.triggered.length,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    return result;
+  } catch (error) {
+    requestLogger.error('Price watch processing failed', {
+      phase,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return { ...EMPTY_PRICE_WATCH_RESULT };
+  }
+}
+
+function buildPriceWatchSeeds(
+  candidates: EmailCandidate[],
+  emailedAtIso: string,
+): PriceWatchSeed[] {
+  const seeds: PriceWatchSeed[] = [];
+  for (const candidate of candidates) {
+    const quality = typeof candidate.quality_score === 'number' ? candidate.quality_score : null;
+    if (!quality || quality < 4) {
+      continue;
+    }
+
+    const insights = candidate.priceInsights ?? [];
+    for (const insight of insights) {
+      if (insight.dataUnavailable) {
+        continue;
+      }
+      const latestPrice = typeof insight.latestPrice === 'number' ? insight.latestPrice : null;
+      if (!latestPrice || latestPrice <= 0) {
+        continue;
+      }
+
+      const ticker = insight.ticker?.toUpperCase?.() ?? insight.ticker;
+      if (!ticker) {
+        continue;
+      }
+
+      const observedAt = insight.latestTimestamp ?? emailedAtIso;
+      seeds.push({
+        postId: candidate.post_id,
+        ticker,
+        qualityScore: quality,
+        emailedAtIso,
+        entryPrice: latestPrice,
+        entryPriceObservedAtIso: observedAt,
+      });
+    }
+  }
+  return seeds;
+}
+
 export async function handler(
   event: EventBridgeEvent<string, any>,
   context: Context,
@@ -196,6 +297,8 @@ export async function handler(
       llmProvider: config.llm.provider,
       maxPosts: config.app.maxPostsPerRun,
     });
+
+    await handlePriceWatchProcessing(config, requestLogger, 'pre-run');
 
     // Optional: test email path
     const testEmailFlag = (event as any)?.testEmail ?? (event as any)?.detail?.testEmail;
@@ -392,13 +495,32 @@ export async function handler(
     if (emailCandidates.length > 0) {
       try {
         await sendDigest(emailCandidates, config);
-        await markEmailed(config, emailCandidates.map(c => c.post_id));
+        const emailSentAt = new Date().toISOString();
+        const postIds = emailCandidates.map(c => c.post_id);
+        await markEmailed(config, postIds, emailSentAt);
         emailedCount = emailCandidates.length;
         requestLogger.info('Email digest sent successfully', {
           emailedCount,
           priceExceededCount,
           priceDataUnavailable,
         });
+
+        const watchSeeds = buildPriceWatchSeeds(emailCandidates, emailSentAt);
+        if (watchSeeds.length > 0) {
+          try {
+            const scheduled = await schedulePriceWatches(config, watchSeeds, requestLogger);
+            requestLogger.info('Scheduled price watches for emailed candidates', {
+              scheduled,
+              seedCount: watchSeeds.length,
+            });
+            await handlePriceWatchProcessing(config, requestLogger, 'post-email');
+          } catch (error) {
+            requestLogger.error('Failed to schedule price watch tasks', {
+              seedCount: watchSeeds.length,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
+          }
+        }
       } catch (error) {
         requestLogger.error('Failed to send email digest', {
           candidateCount: emailCandidates.length,

@@ -48,7 +48,9 @@ export interface EmailCandidate {
   priceInsights?: Array<{
     ticker: string;
     entryPrice?: number | null;
+    entryTimestamp?: string | null;
     latestPrice?: number | null;
+    latestTimestamp?: string | null;
     movePct?: number | null;
     exceedsThreshold?: boolean;
     dataUnavailable?: boolean;
@@ -416,20 +418,21 @@ export async function selectForEmail(
   }
 }
 
-export async function markEmailed(config: Config, postIds: string[]): Promise<void> {
+export async function markEmailed(config: Config, postIds: string[], emailedAtIso?: string): Promise<void> {
   if (postIds.length === 0) {
     logger.debug('No posts to mark as emailed');
     return;
   }
 
   const supabase = getSupabaseClient(config);
+  const timestamp = emailedAtIso ?? new Date().toISOString();
 
   try {
     logger.info('Marking posts as emailed', { postCount: postIds.length });
 
     const { error } = await supabase
       .from('reddit_posts')
-      .update({ emailed_at: new Date().toISOString() } as any)
+      .update({ emailed_at: timestamp } as any)
       .in('post_id', postIds);
 
     if (error) {

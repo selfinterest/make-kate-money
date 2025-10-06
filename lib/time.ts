@@ -95,3 +95,30 @@ export function addDays(date: Date, days: number): Date {
   result.setUTCDate(result.getUTCDate() + days);
   return result;
 }
+
+export function nextEasternBusinessDay(date: Date): Date {
+  let probe = addDays(date, 1);
+  while (isEasternWeekend(probe)) {
+    probe = addDays(probe, 1);
+  }
+  return probe;
+}
+
+export function easternMarketOpen(date: Date): Date {
+  const { year, month, day } = getEasternComponents(date);
+  return easternDateTime(year, month, day, 9, 30);
+}
+
+export function easternMarketClose(date: Date): Date {
+  const { year, month, day } = getEasternComponents(date);
+  return easternDateTime(year, month, day, 16, 0);
+}
+
+export function isDuringEasternMarketHours(date: Date): boolean {
+  if (isEasternWeekend(date)) {
+    return false;
+  }
+  const open = easternMarketOpen(date);
+  const close = easternMarketClose(date);
+  return date >= open && date <= close;
+}
