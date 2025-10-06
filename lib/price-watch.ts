@@ -1,7 +1,7 @@
 import type { Config } from './config';
 import { getSupabaseClient } from './db';
 import { logger } from './logger';
-import { TiingoClient, findLastBarOnOrBefore } from './tiingo';
+import { TiingoClient, findLastBarOnOrBefore, type IntradayBar } from './tiingo';
 import {
   easternMarketClose,
   easternMarketOpen,
@@ -345,7 +345,7 @@ export async function processPriceWatchQueue(
 
   for (const [ticker, rows] of groups.entries()) {
     const window = computeTiingoWindow(rows, now);
-    let series = [];
+    let series: IntradayBar[] = [];
     try {
       series = await tiingo.fetchIntraday({
         ticker,
