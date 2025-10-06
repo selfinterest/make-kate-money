@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../lib/logger';
 import { parseEnv } from '../lib/config';
-import { getSupabaseClient } from '../lib/db';
+import { getSupabaseClient, upsertPostPerformance, applyTickerPerformanceIncrements } from '../lib/db';
 import { TiingoClient, findFirstBarOnOrAfter, findLastBarOnOrBefore } from '../lib/tiingo';
 import { addDays, easternDateTime, getEasternComponents, isEasternWeekend, startOfEasternDay } from '../lib/time';
 import type { PositionReport, ReportPayload, ReportSummary } from '../lib/performance-types';
@@ -425,6 +425,57 @@ export async function handler(event: LambdaEvent, context: Context): Promise<Rep
       meta: summary,
       positions,
     };
+
+    try {
+      if (completed.length > 0) {
+        const performanceRecords = completed.map(p => ({
+          postId: p.postId,
+          ticker: p.ticker,
+          returnPct: typeof p.returnPct === 'number' ? p.returnPct / 100 : null,
+          profitUsd: p.profitUsd ?? null,
+          entryPrice: p.entry.price ?? null,
+          exitPrice: p.exit.price ?? null,
+          lookbackDate: summary.lookbackDateEt,
+          runDate: summary.runDateEt,
+          emailedAt: p.emailedAt ?? null,
+          subreddit: p.subreddit ?? null,
+          author: p.author ?? null,
+        }));
+
+        await upsertPostPerformance(config, performanceRecords);
+
+        const tickerAccumulator = new Map<string, { sampleSize: number; sumReturn: number; winCount: number }>();
+
+        performanceRecords.forEach(record => {
+          if (record.returnPct === null || record.returnPct === undefined || Number.isNaN(record.returnPct)) {
+            return;
+          }
+          const current = tickerAccumulator.get(record.ticker) ?? { sampleSize: 0, sumReturn: 0, winCount: 0 };
+          current.sampleSize += 1;
+          current.sumReturn += record.returnPct;
+          if (record.returnPct > 0) {
+            current.winCount += 1;
+          }
+          tickerAccumulator.set(record.ticker, current);
+        });
+
+        const tickerIncrements = Array.from(tickerAccumulator.entries()).map(([ticker, stats]) => ({
+          ticker,
+          sampleSize: stats.sampleSize,
+          sumReturnPct: stats.sumReturn,
+          winCount: stats.winCount,
+          lastRunDate: summary.runDateEt,
+        }));
+
+        if (tickerIncrements.length > 0) {
+          await applyTickerPerformanceIncrements(config, tickerIncrements);
+        }
+      }
+    } catch (perfError) {
+      log.error('Failed to persist performance statistics', {
+        error: perfError instanceof Error ? perfError.message : 'Unknown error',
+      });
+    }
 
     const bucket = process.env.PERFORMANCE_REPORT_BUCKET;
     if (!bucket) {
