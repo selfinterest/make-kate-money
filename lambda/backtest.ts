@@ -3,6 +3,7 @@ import { logger } from '../lib/logger';
 import { parseEnv } from '../lib/config';
 import { getSupabaseClient } from '../lib/db';
 import { SSMClient, PutParameterCommand, GetParameterCommand } from '@aws-sdk/client-ssm';
+import { TiingoClient } from '../lib/tiingo';
 
 interface BacktestResult {
     ok: boolean;
@@ -396,18 +397,13 @@ interface FetchAndCacheInputs {
 async function fetchAndCacheDailyPrices({ tickers, tiingoApiKey, supabase, horizonDays }: FetchAndCacheInputs) {
   logger.info('Starting fetchAndCacheDailyPrices', { tickerCount: tickers.length, horizonDays });
 
-  const fetchFn = (globalThis as any).fetch as ((input: string, init?: any) => Promise<any>) | undefined;
-  if (typeof fetchFn !== 'function') {
-    throw new Error('global fetch is not available in this runtime');
-  }
-
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-  // Validate horizonDays
-  if (typeof horizonDays !== 'number' || isNaN(horizonDays) || horizonDays <= 0) {
+  if (typeof horizonDays !== 'number' || Number.isNaN(horizonDays) || horizonDays <= 0) {
     logger.error('Invalid horizonDays value', { horizonDays, type: typeof horizonDays });
     throw new Error(`Invalid horizonDays: ${horizonDays}`);
   }
+
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const tiingo = new TiingoClient(tiingoApiKey);
 
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -417,91 +413,54 @@ async function fetchAndCacheDailyPrices({ tickers, tiingoApiKey, supabase, horiz
   logger.info('Days back calculated', { horizonDays, daysBack });
 
   const earliestNeeded = new Date(today);
-  const currentDate = earliestNeeded.getUTCDate();
-  const newDate = currentDate - daysBack;
-  logger.info('Date calculation', { currentDate, daysBack, newDate });
-
-  earliestNeeded.setUTCDate(newDate);
+  earliestNeeded.setUTCDate(earliestNeeded.getUTCDate() - daysBack);
   logger.info('Earliest needed calculated', { earliestNeeded: earliestNeeded.toISOString() });
 
-  const startDate = earliestNeeded.toISOString().slice(0, 10);
-  logger.info('Start date for Tiingo API', { startDate });
-
-  for (let i = 0; i < tickers.length; i++) {
+  for (let i = 0; i < tickers.length; i += 1) {
     const ticker = tickers[i];
     logger.info('Processing ticker', { index: i, ticker, totalTickers: tickers.length });
 
-    const params = new URLSearchParams({
-      token: tiingoApiKey,
-      startDate,
-      resampleFreq: 'daily',
-    });
-    const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ticker)}/prices?${params.toString()}`;
-
     try {
-      const res = await fetchFn(url);
-      if (!res.ok) {
-        const body = await res.text();
-        logger.warn('Tiingo daily fetch failed', { ticker, status: res.status, statusText: res.statusText, body: body?.slice(0, 200) });
-        await sleep(500);
+      const bars = await tiingo.fetchDaily({
+        ticker,
+        start: earliestNeeded,
+        end: today,
+        frequency: 'daily',
+        adjusted: true,
+      });
+
+      if (bars.length === 0) {
+        logger.debug('No Tiingo daily bars returned', { ticker });
         continue;
       }
 
-      const json = await res.json();
-      if (!Array.isArray(json)) {
-        logger.warn('Unexpected Tiingo daily response shape', { ticker });
-        await sleep(300);
-        continue;
-      }
+      const rows = bars.map(bar => ({
+        ticker,
+        ts: bar.timestamp,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+      }));
 
-      const rows: Array<{ ticker: string; ts: string; open: number; high: number; low: number; close: number }> = [];
-      for (const item of json) {
-        if (!item?.date) {
-          continue;
-        }
-        const ts = coerceDate(item.date);
-        if (!ts) {
-          logger.warn('Skipping Tiingo row with invalid date', { ticker, date: item.date });
-          continue;
-        }
-
-        const open = typeof item.open === 'number' ? item.open : Number(item.open ?? NaN);
-        const high = typeof item.high === 'number' ? item.high : Number(item.high ?? NaN);
-        const low = typeof item.low === 'number' ? item.low : Number(item.low ?? NaN);
-        const close = typeof item.close === 'number' ? item.close : Number(item.close ?? NaN);
-
-        if (![open, high, low, close].every(Number.isFinite)) {
-          logger.warn('Skipping Tiingo row with invalid prices', { ticker, date: item.date });
-          continue;
-        }
-
-        rows.push({
-          ticker,
-          ts: ts.toISOString(),
-          open,
-          high,
-          low,
-          close,
-        });
-      }
-
-      if (rows.length > 0) {
-        const chunkSize = 500;
-        for (let i = 0; i < rows.length; i += chunkSize) {
-          const chunk = rows.slice(i, i + chunkSize);
-          const { error } = await supabase.from('prices').upsert(chunk as any, { onConflict: 'ticker,ts' });
-          if (error) {
-            logger.warn('Failed to upsert Tiingo daily prices', { ticker, error: error.message });
-            break;
-          }
+      const chunkSize = 500;
+      for (let offset = 0; offset < rows.length; offset += chunkSize) {
+        const chunk = rows.slice(offset, offset + chunkSize);
+        const { error } = await supabase.from('prices').upsert(chunk as any, { onConflict: 'ticker,ts' });
+        if (error) {
+          logger.warn('Failed to upsert Tiingo daily prices', { ticker, error: error.message });
+          break;
         }
       }
     } catch (error) {
       logger.warn('Tiingo daily fetch threw', { ticker, error: error instanceof Error ? error.message : 'unknown' });
     }
 
-    await sleep(250); // stay well below Tiingo rate limits
+    await sleep(200);
   }
+
+  const usage = tiingo.getUsage();
+  logger.info('Tiingo daily fetch usage', { requests: usage.requests });
 }
 
 function coerceDate(value: unknown): Date | null {

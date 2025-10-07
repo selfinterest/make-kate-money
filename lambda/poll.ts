@@ -8,7 +8,14 @@ import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '
 import type { EmailCandidate } from '../lib/db';
 import { sendDigest, sendPriceWatchAlerts } from '../lib/email';
 import { logger } from '../lib/logger';
-import { TiingoClient, findFirstBarOnOrAfter, findLastBarOnOrBefore } from '../lib/tiingo';
+import {
+  TiingoClient,
+  findFirstBarOnOrAfter,
+  findLastBarOnOrBefore,
+  type TiingoNewsArticle,
+  type TiingoFundamentalStatement,
+  type TiingoTickerContext,
+} from '../lib/tiingo';
 import {
   schedulePriceWatches,
   processPriceWatchQueue,
@@ -25,6 +32,10 @@ interface PollResponse {
   error?: string;
   executionTime?: number;
 }
+
+const NEWS_LOOKBACK_DAYS = 2;
+const MAX_TICKER_ENRICHMENT = 12;
+const MAX_CONTEXT_NEWS = 5;
 
 function computeVotesPerMinute(createdUtc: string, score: number, referenceMs: number): number {
   const createdMs = new Date(createdUtc).getTime();
@@ -55,6 +66,8 @@ async function annotateCandidatesWithPriceMove(
   const maxLookbackMs = 3 * 24 * 60 * 60 * 1000; // limit to last 3 days of intraday data
 
   const tickerWindows = new Map<string, { startMs: number }>();
+  const tickerNews = new Map<string, TiingoNewsArticle[]>();
+  const tickerFundamentals = new Map<string, TiingoFundamentalStatement | null>();
 
   for (const candidate of candidates) {
     const createdMs = new Date(candidate.created_utc).getTime();
@@ -72,6 +85,12 @@ async function annotateCandidatesWithPriceMove(
       const current = tickerWindows.get(ticker);
       if (!current || startMs < current.startMs) {
         tickerWindows.set(ticker, { startMs });
+      }
+      if (!tickerNews.has(ticker)) {
+        tickerNews.set(ticker, []);
+      }
+      if (!tickerFundamentals.has(ticker)) {
+        tickerFundamentals.set(ticker, null);
       }
     }
   }
@@ -96,6 +115,41 @@ async function annotateCandidatesWithPriceMove(
     }
   }
 
+  const enrichTickers = Array.from(tickerWindows.keys()).slice(0, MAX_TICKER_ENRICHMENT);
+  const newsWindowStart = new Date(nowMs - NEWS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+
+  for (const ticker of enrichTickers) {
+    try {
+      const articles = await tiingo.fetchNews({
+        tickers: [ticker],
+        startDate: newsWindowStart,
+        endDate: now,
+        limit: 8,
+      });
+      tickerNews.set(ticker, articles);
+    } catch (error) {
+      requestLogger.warn('Failed to fetch Tiingo news for ticker', {
+        ticker,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+
+    try {
+      const fundamentals = await tiingo.fetchFundamentals({
+        ticker,
+        statementType: 'income',
+        period: 'quarterly',
+        limit: 1,
+      });
+      tickerFundamentals.set(ticker, fundamentals[0] ?? null);
+    } catch (error) {
+      requestLogger.warn('Failed to fetch Tiingo fundamentals for ticker', {
+        ticker,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
   const annotated: EmailCandidate[] = [];
   let exceededCount = 0;
   let dataUnavailableCount = 0;
@@ -110,10 +164,16 @@ async function annotateCandidatesWithPriceMove(
     let anyExceeded = false;
     let maxObservedMove: number | null = null;
     let unavailableForCandidate = 0;
+    const contexts: TiingoTickerContext[] = [];
 
     if (!Number.isNaN(createdMs) && tickers.length > 0) {
       for (const ticker of tickers) {
         const series = tickerSeries.get(ticker);
+        const newsItems = (tickerNews.get(ticker) ?? []).slice(0, MAX_CONTEXT_NEWS);
+        const fundamentals = tickerFundamentals.get(ticker) ?? null;
+        if (newsItems.length > 0 || fundamentals) {
+          contexts.push({ ticker, news: newsItems, fundamentals });
+        }
         if (!series || series.length === 0) {
           insights.push({ ticker, dataUnavailable: true });
           unavailableForCandidate += 1;
@@ -185,6 +245,7 @@ async function annotateCandidatesWithPriceMove(
         maxMovePct: maxObservedMove,
         dataUnavailableCount: unavailableForCandidate,
       },
+      tiingoContext: contexts.length > 0 ? contexts : undefined,
     });
   }
 
