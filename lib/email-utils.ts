@@ -7,6 +7,16 @@ export function formatUsd(value?: number | null): string {
   return `$${value.toFixed(2)}`;
 }
 
+export function formatCompactNumber(value?: number | null): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'n/a';
+  }
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 export function formatPct(value?: number | null): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return 'n/a';

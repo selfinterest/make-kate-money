@@ -3,6 +3,7 @@ import { logger } from './logger';
 import type { Config } from './config';
 import type { Prefiltered } from './prefilter';
 import type { LlmResult } from './llm';
+import type { TiingoTickerContext } from './tiingo';
 
 let supabaseClient: SupabaseClient | null = null;
 
@@ -65,6 +66,7 @@ export interface EmailCandidate {
     bestAvgReturnPct: number;
     roiBoost: number;
   };
+  tiingoContext?: TiingoTickerContext[];
 }
 
 export interface PerformanceRecord {
