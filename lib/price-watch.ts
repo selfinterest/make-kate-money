@@ -52,7 +52,7 @@ export interface PriceWatchProcessResult {
   exceededFifteenPct: number;
 }
 
-interface DbPriceWatchRow {
+export interface DbPriceWatchRow {
   id: number;
   post_id: string;
   ticker: string;
@@ -83,7 +83,7 @@ interface PriceWatchUpdate {
   triggered_move_pct?: number | null;
 }
 
-function computeMonitorWindow(emailedAt: Date): { start: Date; close: Date } {
+export function computeMonitorWindow(emailedAt: Date): { start: Date; close: Date } {
   if (isDuringEasternMarketHours(emailedAt)) {
     return {
       start: emailedAt,
@@ -119,7 +119,7 @@ function computeMonitorWindow(emailedAt: Date): { start: Date; close: Date } {
   return { start: emailedAt, close };
 }
 
-function uniqueSeeds(seeds: PriceWatchSeed[]): PriceWatchSeed[] {
+export function uniqueSeeds(seeds: PriceWatchSeed[]): PriceWatchSeed[] {
   const seen = new Set<string>();
   const result: PriceWatchSeed[] = [];
   for (const seed of seeds) {
@@ -136,7 +136,7 @@ function uniqueSeeds(seeds: PriceWatchSeed[]): PriceWatchSeed[] {
   return result;
 }
 
-function isValidSeed(seed: PriceWatchSeed): boolean {
+export function isValidSeed(seed: PriceWatchSeed): boolean {
   return (
     typeof seed.postId === 'string'
     && seed.postId.length > 0
@@ -204,7 +204,7 @@ export async function schedulePriceWatches(
   return rows.length;
 }
 
-function groupByTicker(rows: DbPriceWatchRow[]): Map<string, DbPriceWatchRow[]> {
+export function groupByTicker(rows: DbPriceWatchRow[]): Map<string, DbPriceWatchRow[]> {
   const map = new Map<string, DbPriceWatchRow[]>();
   for (const row of rows) {
     const ticker = (row.ticker || '').toUpperCase();
@@ -217,7 +217,7 @@ function groupByTicker(rows: DbPriceWatchRow[]): Map<string, DbPriceWatchRow[]> 
   return map;
 }
 
-function parseNumber(value: number | string | null | undefined): number | null {
+export function parseNumber(value: number | string | null | undefined): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
@@ -228,7 +228,7 @@ function parseNumber(value: number | string | null | undefined): number | null {
   return null;
 }
 
-function computeTiingoWindow(rows: DbPriceWatchRow[], now: Date): { start: Date; end: Date } {
+export function computeTiingoWindow(rows: DbPriceWatchRow[], now: Date): { start: Date; end: Date } {
   let earliest = now.getTime();
   for (const row of rows) {
     const candidates: Array<string | null | undefined> = [row.monitor_start_at, row.entry_price_ts];
@@ -486,4 +486,3 @@ export async function processPriceWatchQueue(
     exceededFifteenPct,
   };
 }
-
