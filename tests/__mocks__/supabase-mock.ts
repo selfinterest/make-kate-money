@@ -98,7 +98,16 @@ export class MockSupabaseClient {
 
   from(table: string) {
     return {
-      select: (columns: string = '*') => this.buildQuery(table, 'select', columns),
+      select: (columns: string = '*') => {
+        // Extract join information from columns like "reddit_posts ( title, url )"
+        const joinMatch = columns.match(/(\w+)\s*\(([^)]+)\)/);
+        const joinInfo = joinMatch ? {
+          table: joinMatch[1],
+          columns: joinMatch[2].split(',').map(c => c.trim()),
+        } : undefined;
+        
+        return this.buildQuery(table, 'select', columns, undefined, undefined, joinInfo);
+      },
       insert: (rows: any[]) => this.buildQuery(table, 'insert', undefined, rows),
       upsert: (rows: any, options?: any) => this.buildQuery(table, 'upsert', undefined, rows, options),
       update: (data: any) => this.buildQuery(table, 'update', undefined, data),
@@ -112,6 +121,7 @@ export class MockSupabaseClient {
     columns?: string,
     data?: any,
     options?: any,
+    joinInfo?: { table: string; columns: string[] },
   ) {
     const filters: Array<{ type: string; column?: string; value?: any }> = [];
     let orderBy: { column: string; ascending: boolean } | undefined;
@@ -151,23 +161,28 @@ export class MockSupabaseClient {
         singleRow = true;
         return query;
       },
-      then: async (resolve: any) => {
-        try {
-          const result = await this.executeQuery(
-            table,
-            operation,
-            filters,
-            data,
-            columns,
-            orderBy,
-            limitValue,
-            singleRow,
-            options,
-          );
-          resolve(result);
-        } catch (error) {
-          resolve({ data: null, error });
-        }
+      then: (resolve: any, reject?: any) => {
+        return Promise.resolve()
+          .then(async () => {
+            try {
+              const result = await this.executeQuery(
+                table,
+                operation,
+                filters,
+                data,
+                columns,
+                orderBy,
+                limitValue,
+                singleRow,
+                options,
+                joinInfo,
+              );
+              return result;
+            } catch (error) {
+              return { data: null, error };
+            }
+          })
+          .then(resolve, reject);
       },
     };
 
@@ -184,6 +199,7 @@ export class MockSupabaseClient {
     limitValue?: number,
     singleRow?: boolean,
     options?: any,
+    joinInfo?: { table: string; columns: string[] },
   ): Promise<{ data: any; error: any }> {
     const tableData = (this.db as any)[table];
 
@@ -207,7 +223,7 @@ export class MockSupabaseClient {
                   return row[filter.column!] === filter.value;
                 case 'is':
                   return filter.value === null
-                    ? row[filter.column!] === null
+                    ? (row[filter.column!] === null || row[filter.column!] === undefined)
                     : row[filter.column!] === filter.value;
                 case 'gte':
                   return row[filter.column!] >= filter.value;
@@ -236,6 +252,34 @@ export class MockSupabaseClient {
             results = results.slice(0, limitValue);
           }
 
+          // Handle joins if present
+          if (joinInfo) {
+            const joinedTableData = (this.db as any)[joinInfo.table] || [];
+            results = results.map(row => {
+              // Find matching row in joined table based on foreign key
+              // Assume the foreign key is the singular form of the joined table name + _id
+              // or just use post_id as the common pattern
+              const foreignKey = 'post_id'; // Common in this app
+              const joinedRow = joinedTableData.find((jr: any) => jr.post_id === row[foreignKey]);
+              
+              if (joinedRow) {
+                // Only include requested columns from the joined table
+                const joinedData: any = {};
+                joinInfo.columns.forEach(col => {
+                  if (joinedRow[col] !== undefined) {
+                    joinedData[col] = joinedRow[col];
+                  }
+                });
+                return {
+                  ...row,
+                  [joinInfo.table]: joinedData,
+                };
+              }
+              
+              return row;
+            });
+          }
+
           // Return single row if requested
           if (singleRow) {
             if (results.length === 0) {
@@ -258,12 +302,14 @@ export class MockSupabaseClient {
 
         case 'upsert': {
           const rows = Array.isArray(data) ? data : [data];
-          const conflictColumn = options?.onConflict || 'id';
+          const conflictSpec = options?.onConflict || 'id';
+          const conflictColumns = (conflictSpec as string).split(',').map((col: string) => col.trim());
 
           for (const row of rows) {
-            const existingIndex = tableData.findIndex(
-              (existing: any) => existing[conflictColumn] === row[conflictColumn],
-            );
+            const existingIndex = tableData.findIndex((existing: any) => {
+              // Check if all conflict columns match
+              return conflictColumns.every(col => existing[col] === row[col]);
+            });
 
             if (existingIndex >= 0) {
               tableData[existingIndex] = { ...tableData[existingIndex], ...row };

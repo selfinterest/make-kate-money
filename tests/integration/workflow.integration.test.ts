@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestContext,
   createTestPost,
@@ -9,18 +9,16 @@ import {
 import { prefilterBatch } from '../../lib/prefilter';
 import { logger } from '../../lib/logger';
 import type { LlmResult } from '../../lib/llm';
+import {
+  __resetSupabaseClient,
+  __setSupabaseClient,
+} from '../../lib/db';
 
-// Mock the modules
-vi.mock('../../lib/db', async () => {
-  const actual = await vi.importActual('../../lib/db');
+// Mock TiingoClient
+vi.mock('../../lib/tiingo', async () => {
+  const actual = await vi.importActual('../../lib/tiingo');
   return {
     ...actual,
-    getSupabaseClient: vi.fn(),
-  };
-});
-
-vi.mock('../../lib/tiingo', () => {
-  return {
     TiingoClient: vi.fn(),
   };
 });
@@ -31,7 +29,6 @@ import {
   upsertPosts,
   selectForEmail,
   markEmailed,
-  getSupabaseClient,
 } from '../../lib/db';
 import { schedulePriceWatches } from '../../lib/price-watch';
 import { TiingoClient } from '../../lib/tiingo';
@@ -42,14 +39,22 @@ import { TiingoClient } from '../../lib/tiingo';
  * ingestion through email notification and price monitoring.
  */
 describe('Workflow Integration Tests', () => {
-  let context: ReturnType<typeof createTestContext>;
+  let context: Awaited<ReturnType<typeof createTestContext>>;
 
-  beforeEach(() => {
-    context = createTestContext();
+  beforeEach(async () => {
+    context = await createTestContext();
 
-    // Configure mocks to return our test context's clients
-    vi.mocked(getSupabaseClient).mockReturnValue(context.supabase);
+    // Use real Supabase client
+    __resetSupabaseClient();
+    __setSupabaseClient(context.supabase);
+    
+    vi.mocked(TiingoClient).mockReset();
     vi.mocked(TiingoClient).mockImplementation(() => context.tiingo as any);
+  });
+
+  afterEach(async () => {
+    // Clean up database after each test
+    await context.cleanup();
   });
 
   describe('End-to-End Reddit to Email Flow', () => {
@@ -157,13 +162,22 @@ describe('Workflow Integration Tests', () => {
       // ===== Step 5: Store results in database =====
       await upsertPosts(context.config, prefiltered, llmResults);
 
-      const db = (context.supabase as any).getDatabase();
-      expect(db.reddit_posts).toHaveLength(3);
+      // Verify using real database query
+      const { data: allPosts } = await context.supabase
+        .from('reddit_posts')
+        .select('*');
+      expect(allPosts).toHaveLength(3);
 
-      const aaplPost = db.reddit_posts.find((p: any) => p.post_id === 'post1');
+      const { data: aaplPost } = await context.supabase
+        .from('reddit_posts')
+        .select('*')
+        .eq('post_id', 'post1')
+        .single();
       expect(aaplPost).toBeDefined();
-      expect(aaplPost.is_future_upside_claim).toBe(true);
-      expect(aaplPost.quality_score).toBe(5);
+      expect(aaplPost?.is_future_upside_claim).toBe(true);
+      expect(aaplPost?.quality_score).toBe(5);
+      expect(aaplPost?.stance).toBe('bullish');
+      expect(aaplPost?.emailed_at == null).toBe(true); // null or undefined
 
       // ===== Step 6: Update cursor =====
       await setCursor(context.config, 'test_cursor', posts);
@@ -182,12 +196,22 @@ describe('Workflow Integration Tests', () => {
       const emailedPostIds = emailCandidates.map(c => c.post_id);
       await markEmailed(context.config, emailedPostIds, emailedAt);
 
-      const aaplPostAfterEmail = db.reddit_posts.find((p: any) => p.post_id === 'post1');
-      expect(aaplPostAfterEmail.emailed_at).toBe(emailedAt);
+      // Verify using real database query
+      const { data: aaplPostAfterEmail } = await context.supabase
+        .from('reddit_posts')
+        .select('emailed_at')
+        .eq('post_id', 'post1')
+        .single();
+      // Postgres may return timestamp in different format, compare as dates
+      expect(new Date(aaplPostAfterEmail?.emailed_at!).getTime()).toBe(new Date(emailedAt).getTime());
 
       // ===== Step 9: Verify only emailed posts are marked =====
-      const tslaPost = db.reddit_posts.find((p: any) => p.post_id === 'post2');
-      expect(tslaPost.emailed_at).toBeNull();
+      const { data: tslaPost } = await context.supabase
+        .from('reddit_posts')
+        .select('emailed_at')
+        .eq('post_id', 'post2')
+        .single();
+      expect(tslaPost?.emailed_at).toBeNull();
 
       // ===== Step 10: Schedule price watches =====
       // Set up mock price data for the tickers
@@ -211,17 +235,29 @@ describe('Workflow Integration Tests', () => {
       const watchCount = await schedulePriceWatches(context.config, priceWatchSeeds, requestLogger);
 
       expect(watchCount).toBe(2);
-      expect(db.price_watches).toHaveLength(2);
 
-      const aaplWatch = db.price_watches.find((w: any) => w.ticker === 'AAPL');
+      // Verify price watches using real database query
+      const { data: priceWatches } = await context.supabase
+        .from('price_watches')
+        .select('*');
+      expect(priceWatches).toHaveLength(2);
+
+      const aaplWatch = priceWatches?.find((w: any) => w.ticker === 'AAPL');
       expect(aaplWatch).toBeDefined();
-      expect(aaplWatch.entry_price).toBe(150.0);
-      expect(aaplWatch.post_id).toBe('post1');
+      expect(aaplWatch?.entry_price).toBe(150.0);
+      expect(aaplWatch?.post_id).toBe('post1');
 
       // ===== Verification: Complete workflow executed successfully =====
-      expect(db.reddit_posts).toHaveLength(3);
-      expect(db.reddit_posts.filter((p: any) => p.emailed_at !== null)).toHaveLength(2);
-      expect(db.price_watches).toHaveLength(2);
+      const { data: finalPosts } = await context.supabase
+        .from('reddit_posts')
+        .select('*');
+      expect(finalPosts).toHaveLength(3);
+      expect(finalPosts?.filter((p: any) => p.emailed_at !== null)).toHaveLength(2);
+      
+      const { data: finalWatches } = await context.supabase
+        .from('price_watches')
+        .select('*');
+      expect(finalWatches).toHaveLength(2);
     });
   });
 
@@ -231,27 +267,25 @@ describe('Workflow Integration Tests', () => {
       const twoDaysAgo = hoursAgo(48);
       const now = new Date();
 
-      const db = (context.supabase as any).getDatabase();
-      db.reddit_posts = [
-        {
-          post_id: 'historical_post',
-          title: 'NVDA will surge',
-          body: 'NVIDIA is going to explode',
-          subreddit: 'stocks',
-          author: 'prophet',
-          url: 'https://reddit.com/test',
-          created_utc: twoDaysAgo.toISOString(),
-          score: 500,
-          detected_tickers: ['NVDA'],
-          llm_tickers: ['NVDA'],
-          is_future_upside_claim: true,
-          stance: 'bullish',
-          reason: 'AI growth catalyst',
-          quality_score: 5,
-          emailed_at: twoDaysAgo.toISOString(),
-          processed_at: twoDaysAgo.toISOString(),
-        },
-      ];
+      // Seed database with historical post using real database
+      await context.supabase.from('reddit_posts').insert({
+        post_id: 'historical_post',
+        title: 'NVDA will surge',
+        body: 'NVIDIA is going to explode',
+        subreddit: 'stocks',
+        author: 'prophet',
+        url: 'https://reddit.com/test',
+        created_utc: twoDaysAgo.toISOString(),
+        score: 500,
+        detected_tickers: ['NVDA'],
+        llm_tickers: ['NVDA'],
+        is_future_upside_claim: true,
+        stance: 'bullish',
+        reason: 'AI growth catalyst',
+        quality_score: 5,
+        emailed_at: twoDaysAgo.toISOString(),
+        processed_at: twoDaysAgo.toISOString(),
+      });
 
       // ===== Setup price data showing 20% gain =====
       const startPrice = 500.0;
@@ -269,7 +303,7 @@ describe('Workflow Integration Tests', () => {
 
       // ===== Simulate performance calculation =====
       // In the real app, this would be done by the backtest lambda
-      const performanceRecord = {
+      await context.supabase.from('post_performance').insert({
         post_id: 'historical_post',
         ticker: 'NVDA',
         return_pct: 20.0,
@@ -282,12 +316,10 @@ describe('Workflow Integration Tests', () => {
         subreddit: 'stocks',
         author: 'prophet',
         created_at: now.toISOString(),
-      };
-
-      db.post_performance.push(performanceRecord);
+      });
 
       // ===== Update ticker performance aggregates =====
-      const tickerIncrement = {
+      await context.supabase.from('ticker_performance').insert({
         ticker: 'NVDA',
         sample_size: 1,
         sum_return_pct: 20.0,
@@ -296,27 +328,31 @@ describe('Workflow Integration Tests', () => {
         win_rate_pct: 1.0,
         last_run_date: now.toISOString(),
         updated_at: now.toISOString(),
-      };
-
-      db.ticker_performance.push(tickerIncrement);
+      });
 
       // ===== Verification =====
-      expect(db.post_performance).toHaveLength(1);
-      expect(db.post_performance[0].return_pct).toBe(20.0);
-      expect(db.ticker_performance).toHaveLength(1);
-      expect(db.ticker_performance[0].avg_return_pct).toBe(20.0);
-      expect(db.ticker_performance[0].win_rate_pct).toBe(1.0);
+      const { data: postPerf } = await context.supabase
+        .from('post_performance')
+        .select('*');
+      expect(postPerf).toHaveLength(1);
+      expect(postPerf![0].return_pct).toBe(20.0);
+      
+      const { data: tickerPerf } = await context.supabase
+        .from('ticker_performance')
+        .select('*');
+      expect(tickerPerf).toHaveLength(1);
+      expect(tickerPerf![0].avg_return_pct).toBe(20.0);
+      expect(tickerPerf![0].win_rate_pct).toBe(1.0);
     });
   });
 
   describe('Ranking and Reputation Workflow', () => {
     it('should rank posts using author and subreddit reputation', async () => {
       const now = new Date();
-      const db = (context.supabase as any).getDatabase();
 
       // ===== Setup: Create posts from different authors/subreddits =====
       // Author "good_analyst" has historical track record
-      db.reddit_posts = [
+      await context.supabase.from('reddit_posts').insert([
         // Historical posts from good_analyst (quality 5)
         {
           post_id: 'hist1',
@@ -391,7 +427,7 @@ describe('Workflow Integration Tests', () => {
           emailed_at: null,
           processed_at: now.toISOString(),
         },
-      ];
+      ]);
 
       // ===== Select for email (should apply reputation boost) =====
       const candidates = await selectForEmail(context.config, { minQuality: 3 });
@@ -415,8 +451,8 @@ describe('Workflow Integration Tests', () => {
       const now = new Date();
       const createdTime = minutesAgo(30);
 
-      const db = (context.supabase as any).getDatabase();
-      db.reddit_posts = [
+      // Seed database with posts using real database
+      await context.supabase.from('reddit_posts').insert([
         {
           post_id: 'volatile_post',
           title: 'GME prediction',
@@ -435,7 +471,7 @@ describe('Workflow Integration Tests', () => {
           emailed_at: null,
           processed_at: createdTime.toISOString(),
         },
-      ];
+      ]);
 
       // ===== Setup: Create price data showing 10% move (above 7% threshold) =====
       const priceData = createPriceSeriesWithMove(
@@ -513,14 +549,18 @@ describe('Workflow Integration Tests', () => {
       // ===== Store =====
       await upsertPosts(context.config, prefiltered, llmResult);
 
-      const db = (context.supabase as any).getDatabase();
-      const storedPost = db.reddit_posts.find((p: any) => p.post_id === 'multi_ticker');
+      // Verify using real database query
+      const { data: storedPost } = await context.supabase
+        .from('reddit_posts')
+        .select('*')
+        .eq('post_id', 'multi_ticker')
+        .single();
 
       expect(storedPost).toBeDefined();
-      expect(storedPost.llm_tickers).toHaveLength(3);
-      expect(storedPost.llm_tickers).toContain('AAPL');
-      expect(storedPost.llm_tickers).toContain('MSFT');
-      expect(storedPost.llm_tickers).toContain('GOOGL');
+      expect(storedPost?.llm_tickers).toHaveLength(3);
+      expect(storedPost?.llm_tickers).toContain('AAPL');
+      expect(storedPost?.llm_tickers).toContain('MSFT');
+      expect(storedPost?.llm_tickers).toContain('GOOGL');
 
       // ===== Price watches should be created for all tickers =====
       const emailedAt = now.toISOString();
@@ -539,9 +579,14 @@ describe('Workflow Integration Tests', () => {
       const watchCount = await schedulePriceWatches(context.config, watchSeeds, requestLogger);
 
       expect(watchCount).toBe(3);
-      expect(db.price_watches).toHaveLength(3);
+      
+      // Verify using real database query
+      const { data: priceWatches } = await context.supabase
+        .from('price_watches')
+        .select('*');
+      expect(priceWatches).toHaveLength(3);
 
-      const tickers = db.price_watches.map((w: any) => w.ticker).sort();
+      const tickers = priceWatches?.map((w: any) => w.ticker).sort();
       expect(tickers).toEqual(['AAPL', 'GOOGL', 'MSFT']);
     });
   });

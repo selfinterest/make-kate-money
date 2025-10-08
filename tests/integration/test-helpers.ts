@@ -1,10 +1,12 @@
 import type { Config } from '../../lib/config';
-import { createMockSupabaseClient, type MockDatabase } from '../__mocks__/supabase-mock';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createTestSupabaseClient, setupTestDatabase, teardownTestDatabase } from '../setup-test-db';
 import { createMockTiingoClient, type MockTiingoData } from '../__mocks__/tiingo-mock';
 import { createMockRedditClient, type MockRedditPost } from '../__mocks__/reddit-mock';
 
 /**
  * Creates a test configuration with sensible defaults for integration tests
+ * Uses local Supabase instance running on port 54321
  */
 export function createTestConfig(overrides?: Partial<Config>): Config {
   return {
@@ -17,8 +19,13 @@ export function createTestConfig(overrides?: Partial<Config>): Config {
       ...overrides?.reddit,
     },
     supabase: {
-      url: 'https://test.supabase.co',
-      apiKey: 'test_api_key',
+      // Point to local Supabase instance (127.0.0.1)
+      url: process.env.SUPABASE_URL || 'http://127.0.0.1:54321',
+      // Standard local Supabase service_role key (same for all local installations)
+      // This is NOT a secret - it's the default demo key documented by Supabase
+      // See: https://supabase.com/docs/guides/local-development
+      apiKey: process.env.SUPABASE_SERVICE_ROLE_KEY || 
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU',
       ...overrides?.supabase,
     },
     llm: {
@@ -52,30 +59,41 @@ export function createTestConfig(overrides?: Partial<Config>): Config {
 }
 
 /**
- * Test context that holds all mock clients and test data
+ * Test context that holds all clients and test data
+ * Uses REAL Supabase for database operations, mocks for external APIs
  */
 export interface TestContext {
   config: Config;
-  supabase: ReturnType<typeof createMockSupabaseClient>;
+  supabase: SupabaseClient;
   tiingo: ReturnType<typeof createMockTiingoClient>;
   reddit: ReturnType<typeof createMockRedditClient>;
-  // Access to underlying mock implementation for advanced testing
-  getMockSupabase: () => any;
+  // Access to mock implementations for advanced testing
   getMockTiingo: () => ReturnType<typeof createMockTiingoClient>;
   getMockReddit: () => ReturnType<typeof createMockRedditClient>;
+  // Cleanup function
+  cleanup: () => Promise<void>;
 }
 
 /**
- * Creates a complete test context with all mock clients
+ * Creates a complete test context with real Supabase and mock external services
+ * 
+ * @param options.seedData - Optional initial database state
+ * @param options.config - Optional config overrides
+ * @param options.tiingoData - Optional mock Tiingo data
+ * @param options.redditPosts - Optional mock Reddit posts
  */
-export function createTestContext(options?: {
+export async function createTestContext(options?: {
   config?: Partial<Config>;
-  supabaseData?: Partial<MockDatabase>;
+  seedData?: Parameters<typeof setupTestDatabase>[0];
   tiingoData?: Partial<MockTiingoData>;
   redditPosts?: MockRedditPost[];
-}): TestContext {
+}): Promise<TestContext> {
   const config = createTestConfig(options?.config);
-  const supabase = createMockSupabaseClient(options?.supabaseData);
+  
+  // Setup real Supabase with clean database
+  const supabase = await setupTestDatabase(options?.seedData);
+  
+  // Create mock clients for external services
   const tiingo = createMockTiingoClient(options?.tiingoData);
   const reddit = createMockRedditClient(options?.redditPosts);
 
@@ -84,9 +102,11 @@ export function createTestContext(options?: {
     supabase,
     tiingo,
     reddit,
-    getMockSupabase: () => supabase,
     getMockTiingo: () => tiingo,
     getMockReddit: () => reddit,
+    cleanup: async () => {
+      await teardownTestDatabase(supabase);
+    },
   };
 }
 

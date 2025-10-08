@@ -17,6 +17,16 @@ export function getSupabaseClient(config: Config): SupabaseClient {
   return supabaseClient;
 }
 
+// Test helper to reset the singleton
+export function __resetSupabaseClient(): void {
+  supabaseClient = null;
+}
+
+// Test helper to set a mock client
+export function __setSupabaseClient(client: SupabaseClient): void {
+  supabaseClient = client;
+}
+
 export interface DatabasePost {
   post_id: string;
   title: string;
