@@ -3,6 +3,7 @@ import { logger } from './logger';
 import type { Config } from './config';
 import type { EmailCandidate } from './db';
 import type { PriceWatchAlertInfo } from './price-watch';
+import type { PositionDropAlertInfo } from './portfolio';
 import type { PerformanceEmailPayload } from './performance-types';
 import {
   escapeHtml,
@@ -353,6 +354,36 @@ export async function sendPriceWatchAlerts(
   }
 }
 
+export async function sendPositionDropAlerts(
+  alerts: PositionDropAlertInfo[],
+  config: Config,
+): Promise<void> {
+  if (alerts.length === 0) {
+    logger.debug('No portfolio alerts to email');
+    return;
+  }
+
+  try {
+    const content = buildPortfolioAlertEmail(alerts);
+    const emailId = await sendEmail(content, config, {
+      alertCount: alerts.length,
+      emailType: 'portfolio-position-alert',
+    });
+
+    logger.info('Portfolio alerts sent', {
+      emailId,
+      alertCount: alerts.length,
+      to: config.email.to,
+    });
+  } catch (error) {
+    logger.error('Failed to send portfolio alerts', {
+      alertCount: alerts.length,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw new Error(`Portfolio alert email failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 export async function sendPerformanceReportEmail(
   payload: PerformanceEmailPayload,
   config: Config,
@@ -484,6 +515,76 @@ function buildPriceWatchEmail(alerts: PriceWatchAlertInfo[]): EmailContent {
   const text = buildPriceWatchText(alerts, subject);
   const html = buildPriceWatchHtml(alerts);
   return { subject, text, html };
+}
+
+function buildPortfolioAlertEmail(alerts: PositionDropAlertInfo[]): EmailContent {
+  const uniqueTickers = Array.from(new Set(alerts.map(alert => alert.ticker)));
+  const subject = `⚠️ Portfolio Alert — ${uniqueTickers.join(', ')}`;
+  const checkedAt = alerts[0]?.checkedAtIso ?? new Date().toISOString();
+  const checkedEt = formatEtTimestamp(checkedAt);
+
+  const textLines: string[] = [
+    subject,
+    '',
+    `Detected during poll at ${checkedEt}`,
+    '',
+  ];
+
+  alerts.forEach(alert => {
+    const current = formatUsd(alert.currentPrice);
+    const previous = formatUsd(alert.previousPrice);
+    const move = formatPct(alert.movePct);
+    const threshold = formatPct(alert.thresholdPct);
+    textLines.push(`${alert.ticker} — ${alert.shares} shares`);
+    textLines.push(`  Now: ${current} (Δ ${move} vs ${previous})`);
+    textLines.push(`  Drop exceeded ${threshold} threshold`);
+    textLines.push('');
+  });
+
+  textLines.push('You may want to review these positions.');
+
+  const htmlRows = alerts.map(alert => {
+    const current = formatUsd(alert.currentPrice);
+    const previous = formatUsd(alert.previousPrice);
+    const move = formatPct(alert.movePct);
+    const threshold = formatPct(alert.thresholdPct);
+    return `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;">${escapeHtml(alert.ticker)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;">${escapeHtml(String(alert.shares))}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;">${escapeHtml(previous)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;">${escapeHtml(current)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;color:#ff4d4f;">${escapeHtml(move)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1f1f1f;">${escapeHtml(threshold)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;color:#f0f0f0;background-color:#111;padding:20px;">
+      <h1 style="color:#39ff14;">${escapeHtml(subject)}</h1>
+      <p>Detected during poll at <strong>${escapeHtml(checkedEt)}</strong>.</p>
+      <p>The following watched positions dropped beyond their configured threshold:</p>
+      <table style="width:100%;border-collapse:collapse;background-color:#000;">
+        <thead>
+          <tr style="background-color:#0f0f0f;">
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Ticker</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Shares</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Previous</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Current</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Change</th>
+            <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #1f1f1f;">Threshold</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${htmlRows}
+        </tbody>
+      </table>
+      <p style="margin-top:16px;">You may want to review these positions.</p>
+    </div>
+  `;
+
+  return { subject, text: textLines.join('\n'), html };
 }
 
 function buildPriceWatchText(alerts: PriceWatchAlertInfo[], subject: string): string {

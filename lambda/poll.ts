@@ -6,7 +6,7 @@ import { prefilterBatch } from '../lib/prefilter';
 import { classifyBatch } from '../lib/llm';
 import { getCursor, setCursor, upsertPosts, selectForEmail, markEmailed } from '../lib/db';
 import type { EmailCandidate } from '../lib/db';
-import { sendDigest, sendPriceWatchAlerts } from '../lib/email';
+import { sendDigest, sendPriceWatchAlerts, sendPositionDropAlerts } from '../lib/email';
 import { logger } from '../lib/logger';
 import {
   TiingoClient,
@@ -22,6 +22,7 @@ import {
   type PriceWatchProcessResult,
   type PriceWatchSeed,
 } from '../lib/price-watch';
+import { processWatchedPositions } from '../lib/portfolio';
 
 interface PollResponse {
   ok: boolean;
@@ -343,6 +344,43 @@ function buildPriceWatchSeeds(
   return seeds;
 }
 
+async function handlePortfolioWatchProcessing(
+  config: Config,
+  requestLogger: ReturnType<typeof logger.withContext>,
+  phase: string,
+): Promise<void> {
+  try {
+    const result = await processWatchedPositions(config, requestLogger, new Date());
+
+    if (result.checked > 0) {
+      requestLogger.info('Processed watched portfolio positions', {
+        phase,
+        checked: result.checked,
+        updated: result.updated,
+        alerts: result.alerts.length,
+        dataUnavailable: result.dataUnavailable,
+      });
+    }
+
+    if (result.alerts.length > 0) {
+      try {
+        await sendPositionDropAlerts(result.alerts, config);
+      } catch (error) {
+        requestLogger.error('Failed to send portfolio position alerts', {
+          phase,
+          alertCount: result.alerts.length,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+  } catch (error) {
+    requestLogger.error('Portfolio watch processing failed', {
+      phase,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}
+
 export async function handler(
   event: EventBridgeEvent<string, any>,
   context: Context,
@@ -366,6 +404,7 @@ export async function handler(
     });
 
     await handlePriceWatchProcessing(config, requestLogger, 'pre-run');
+    await handlePortfolioWatchProcessing(config, requestLogger, 'pre-run');
 
     // Optional: test email path
     const testEmailFlag = (event as any)?.testEmail ?? (event as any)?.detail?.testEmail;

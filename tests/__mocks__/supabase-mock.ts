@@ -63,6 +63,23 @@ export interface MockDatabase {
     last_run_date: string | null;
     updated_at: string;
   }>;
+  portfolio_positions: Array<{
+    id: string;
+    user_id: string;
+    ticker: string;
+    shares: number;
+    watch: boolean;
+    last_price: number | null;
+    last_price_ts: string | null;
+    last_price_source: string | null;
+    alert_threshold_pct: number;
+    last_alert_at: string | null;
+    last_alert_price: number | null;
+    last_alert_move_pct: number | null;
+    notes: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
 }
 
 export class MockSupabaseClient {
@@ -75,6 +92,7 @@ export class MockSupabaseClient {
       price_watches: [],
       post_performance: [],
       ticker_performance: [],
+      portfolio_positions: [],
       ...initialData,
     };
   }
@@ -92,6 +110,7 @@ export class MockSupabaseClient {
       price_watches: [],
       post_performance: [],
       ticker_performance: [],
+      portfolio_positions: [],
       ...newData,
     };
   }
@@ -141,8 +160,16 @@ export class MockSupabaseClient {
         filters.push({ type: 'gte', column, value });
         return query;
       },
+      gt: (column: string, value: any) => {
+        filters.push({ type: 'gt', column, value });
+        return query;
+      },
       lte: (column: string, value: any) => {
         filters.push({ type: 'lte', column, value });
+        return query;
+      },
+      lt: (column: string, value: any) => {
+        filters.push({ type: 'lt', column, value });
         return query;
       },
       in: (column: string, values: any[]) => {
@@ -227,8 +254,12 @@ export class MockSupabaseClient {
                     : row[filter.column!] === filter.value;
                 case 'gte':
                   return row[filter.column!] >= filter.value;
+                case 'gt':
+                  return row[filter.column!] > filter.value;
                 case 'lte':
                   return row[filter.column!] <= filter.value;
+                case 'lt':
+                  return row[filter.column!] < filter.value;
                 case 'in':
                   return filter.value.includes(row[filter.column!]);
                 default:
@@ -399,4 +430,3 @@ export function createMockSupabaseClient(
   const mock = new MockSupabaseClient(initialData);
   return mock as unknown as SupabaseClient;
 }
-

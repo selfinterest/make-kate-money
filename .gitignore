@@ -1,5 +1,8 @@
 node_modules
+web/node_modules
+web/dist
 .env
+web/.env.local
 .vercel
 cdk.out
 tsconfig.tsbuildinfo
