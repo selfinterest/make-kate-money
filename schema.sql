@@ -95,3 +95,30 @@ CREATE INDEX IF NOT EXISTS idx_price_watches_status_next ON price_watches (statu
 CREATE INDEX IF NOT EXISTS idx_price_watches_next_check ON price_watches (next_check_at);
 
 ALTER TABLE price_watches DISABLE ROW LEVEL SECURITY;
+
+-- User-managed portfolio positions (front-end)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
+  ticker TEXT NOT NULL,
+  shares NUMERIC NOT NULL CHECK (shares >= 0),
+  watch BOOLEAN NOT NULL DEFAULT FALSE,
+  last_price NUMERIC,
+  last_price_ts TIMESTAMPTZ,
+  last_price_source TEXT,
+  alert_threshold_pct NUMERIC NOT NULL DEFAULT 0.05,
+  last_alert_at TIMESTAMPTZ,
+  last_alert_price NUMERIC,
+  last_alert_move_pct NUMERIC,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_positions_user ON portfolio_positions (user_id);
+CREATE INDEX IF NOT EXISTS idx_portfolio_positions_watch ON portfolio_positions (watch);
+
+ALTER TABLE portfolio_positions ENABLE ROW LEVEL SECURITY;

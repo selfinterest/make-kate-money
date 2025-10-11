@@ -1,5 +1,14 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 import { PollConstruct } from './constructs/Poll';
 import { BacktestConstruct } from './constructs/Backtest';
@@ -24,6 +33,8 @@ export class RedditStockWatcherStack extends cdk.Stack {
       'REDDIT_PASSWORD',
       'SUPABASE_URL',
       'SUPABASE_API_KEY',
+      'SUPABASE_ANON_KEY',
+      'SUPABASE_ANON_KEY',
       'OPENAI_API_KEY',
       'RESEND_API_KEY',
       'EMAIL_FROM',
@@ -112,6 +123,79 @@ export class RedditStockWatcherStack extends cdk.Stack {
       });
     });
 
+    // Import existing hosted zone for katey.dev
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'KateyDevZone', {
+      hostedZoneId: 'Z06224933H6U8S4RHR5DR',
+      zoneName: 'katey.dev',
+    });
+
+    // Create SSL certificate for the custom domain
+    // Must be in us-east-1 for CloudFront
+    const certificate = new acm.Certificate(this, 'WebUiCertificate', {
+      domainName: 'money.katey.dev',
+      validation: acm.CertificateValidation.fromDns(hostedZone),
+    });
+
+    const webUiBucket = new s3.Bucket(this, 'WebUiBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      versioned: true,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    /*const webUiOriginIdentity = new cloudfront.OriginAccessIdentity(this, 'WebUiOriginIdentity', {
+      comment: 'Access identity for portfolio UI distribution',
+    });
+    webUiBucket.grantRead(webUiOriginIdentity)*/;
+
+    const webUiDistribution = new cloudfront.Distribution(this, 'WebUiDistribution', {
+      defaultRootObject: 'index.html',
+      domainNames: ['money.katey.dev'],
+      certificate: certificate,
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(webUiBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      },
+      errorResponses: [
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+          ttl: cdk.Duration.minutes(1),
+        },
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+          ttl: cdk.Duration.minutes(1),
+        },
+      ],
+    });
+
+    const webUiAssetPath = path.resolve(__dirname, '..', 'web', 'dist');
+    if (!fs.existsSync(webUiAssetPath)) {
+      throw new Error(`Web UI build assets not found at ${webUiAssetPath}. Run "npm --prefix web run build" before deploying.`);
+    }
+
+    new s3deploy.BucketDeployment(this, 'WebUiDeployment', {
+      sources: [s3deploy.Source.asset(webUiAssetPath)],
+      destinationBucket: webUiBucket,
+      distribution: webUiDistribution,
+      distributionPaths: ['/*'],
+    });
+
+    // Create Route53 A record pointing to CloudFront distribution
+    new route53.ARecord(this, 'WebUiAliasRecord', {
+      zone: hostedZone,
+      recordName: 'money',
+      target: route53.RecordTarget.fromAlias(
+        new route53Targets.CloudFrontTarget(webUiDistribution)
+      ),
+    });
+
     // Alerts construct (metrics + SNS)
     const alertEmailParam = new cdk.CfnParameter(this, 'AlertEmail', {
       type: 'String',
@@ -158,6 +242,21 @@ export class RedditStockWatcherStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UpdateTickersFunctionName', {
       value: updateTickers.func.functionName,
       description: 'Name of the ticker update Lambda function',
+    });
+
+    new cdk.CfnOutput(this, 'WebUiBucketName', {
+      value: webUiBucket.bucketName,
+      description: 'S3 bucket serving the portfolio web UI',
+    });
+
+    new cdk.CfnOutput(this, 'WebUiDistributionDomain', {
+      value: webUiDistribution.distributionDomainName,
+      description: 'CloudFront domain for the portfolio dashboard',
+    });
+
+    new cdk.CfnOutput(this, 'WebUiCustomDomain', {
+      value: 'https://money.katey.dev',
+      description: 'Custom domain URL for the portfolio dashboard',
     });
   }
 }
